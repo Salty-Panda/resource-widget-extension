@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RIM — Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css" />
+</head>
+<body>
+  <!-- ── App Shell ── -->
+  <div id="app">
+
+    <!-- ── Top Bar ── -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <span class="logo">RIM</span>
+        <h1 class="app-title">Resource ID Manager</h1>
+      </div>
+      <div class="topbar-search">
+        <input id="search-input" type="search" placeholder="Search by ID, title, tag, URL…" autocomplete="off" />
+      </div>
+      <div class="topbar-actions">
+        <button id="btn-add-resource"  class="btn btn-primary"   title="Add resource manually">+ Add</button>
+        <button id="btn-import"        class="btn btn-secondary" title="Import Chrome bookmarks">Import</button>
+        <button id="btn-migration"     class="btn btn-secondary" title="Migration wizard">Migrate</button>
+        <button id="btn-backup"        class="btn btn-secondary" title="Backup / Restore">Backup</button>
+      </div>
+    </header>
+
+    <!-- ── Main layout ── -->
+    <div class="layout">
+
+      <!-- ── Left Sidebar (Filters) ── -->
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-section">
+          <div class="sidebar-heading">
+            <span>Filters</span>
+            <button id="btn-clear-filters" class="btn-link">Clear</button>
+          </div>
+
+          <label class="filter-label">Tags (AND)</label>
+          <div id="filter-tags-list" class="filter-tag-list"></div>
+          <input id="filter-tag-input" type="text" class="filter-input" placeholder="Add tag filter…" autocomplete="off" />
+
+          <label class="filter-label mt-8">Exclude Tags (NOT)</label>
+          <div id="filter-exclude-tags-list" class="filter-tag-list"></div>
+          <input id="filter-exclude-input" type="text" class="filter-input" placeholder="Exclude tag…" autocomplete="off" />
+
+          <label class="filter-label mt-8">Min Rating</label>
+          <div id="filter-rating" class="rating-filter">
+            <button class="rating-btn active" data-val="0">Any</button>
+            <button class="rating-btn" data-val="1">★</button>
+            <button class="rating-btn" data-val="2">★★</button>
+            <button class="rating-btn" data-val="3">★★★</button>
+            <button class="rating-btn" data-val="4">★★★★</button>
+            <button class="rating-btn" data-val="5">★★★★★</button>
+          </div>
+
+          <label class="filter-label mt-8">Type</label>
+          <div class="type-filter">
+            <label class="checkbox-label">
+              <input type="checkbox" id="filter-pattern-only" />
+              Pattern IDs only
+            </label>
+          </div>
+        </div>
+
+        <div class="sidebar-section sidebar-stats">
+          <div id="stats-total"   class="stat-item"></div>
+          <div id="stats-shown"   class="stat-item"></div>
+          <div id="stats-urls"    class="stat-item"></div>
+        </div>
+      </aside>
+
+      <!-- ── Content ── -->
+      <main class="content">
+
+        <!-- ── Sort / results bar ── -->
+        <div class="results-bar">
+          <span id="results-count" class="results-count"></span>
+          <div class="sort-controls">
+            <label class="sort-label">Sort:</label>
+            <select id="sort-select" class="sort-select">
+              <option value="updatedAt">Last modified</option>
+              <option value="createdAt">Date created</option>
+              <option value="rating">Rating</option>
+              <option value="id">ID / Name</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- ── Resource table ── -->
+        <div class="resource-table-wrap">
+          <table class="resource-table" id="resource-table">
+            <thead>
+              <tr>
+                <th class="col-id">ID / Name</th>
+                <th class="col-title">Title</th>
+                <th class="col-tags">Tags</th>
+                <th class="col-rating">Rating</th>
+                <th class="col-urls">URLs</th>
+                <th class="col-actions"></th>
+              </tr>
+            </thead>
+            <tbody id="resource-tbody"></tbody>
+          </table>
+          <div id="empty-state" class="empty-state hidden">
+            <div class="empty-icon">📭</div>
+            <p>No resources found.</p>
+            <p class="muted">Try adjusting your search or filters.</p>
+          </div>
+        </div>
+
+        <!-- ── Pagination ── -->
+        <div class="pagination" id="pagination"></div>
+
+      </main>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════ MODALS ══ -->
+
+  <!-- ── Resource Edit/View Modal ── -->
+  <div id="modal-resource" class="modal-overlay hidden">
+    <div class="modal modal-large">
+      <div class="modal-header">
+        <div class="modal-title-row">
+          <span id="res-modal-id-badge" class="id-badge-large"></span>
+          <span id="res-modal-pattern-tag" class="tag-pattern hidden">ID</span>
+        </div>
+        <div class="modal-header-actions">
+          <button id="res-btn-merge"  class="btn btn-secondary btn-sm">Merge…</button>
+          <button id="res-btn-delete" class="btn btn-danger btn-sm">Delete</button>
+          <button class="modal-close" data-modal="modal-resource">✕</button>
+        </div>
+      </div>
+
+      <div class="modal-body">
+        <!-- ID rename -->
+        <div class="modal-section">
+          <label class="section-label">ID / Name</label>
+          <div class="id-edit-row">
+            <input id="res-id-input" type="text" class="form-input" placeholder="Resource ID or name" />
+          </div>
+        </div>
+
+        <!-- URLs -->
+        <div class="modal-section">
+          <label class="section-label">URLs</label>
+          <ul id="res-urls-list" class="url-list"></ul>
+          <div class="url-add-row">
+            <input id="res-url-new" type="text" class="form-input" placeholder="https://…" />
+            <button id="res-btn-add-url" class="btn btn-secondary btn-sm">Add</button>
+          </div>
+        </div>
+
+        <!-- Titles -->
+        <div class="modal-section">
+          <label class="section-label">Titles</label>
+          <ul id="res-titles-list" class="titles-list"></ul>
+          <div class="url-add-row">
+            <input id="res-title-new" type="text" class="form-input" placeholder="Add title…" />
+            <button id="res-btn-add-title" class="btn btn-secondary btn-sm">Add</button>
+          </div>
+        </div>
+
+        <!-- Tags -->
+        <div class="modal-section">
+          <label class="section-label">Tags</label>
+          <div id="res-tags-editor" class="tags-editor"></div>
+          <div class="url-add-row">
+            <input id="res-tag-new" type="text" class="form-input" placeholder="Add tag…" list="tag-datalist" />
+            <datalist id="tag-datalist"></datalist>
+            <button id="res-btn-add-tag" class="btn btn-secondary btn-sm">Add</button>
+          </div>
+        </div>
+
+        <!-- Rating -->
+        <div class="modal-section">
+          <label class="section-label">Rating</label>
+          <div id="res-rating-input" class="star-input" data-value="0"></div>
+          <span class="muted small">Click the same star to clear the rating.</span>
+        </div>
+
+        <!-- Metadata -->
+        <div class="modal-section meta-row">
+          <span id="res-meta-created"></span>
+          <span id="res-meta-updated"></span>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button id="res-btn-save"   class="btn btn-primary">Save Changes</button>
+        <button class="btn btn-secondary modal-close" data-modal="modal-resource">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Merge Tool Modal ── -->
+  <div id="modal-merge" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 class="modal-title">Merge Resources</h2>
+        <button class="modal-close" data-modal="modal-merge">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="muted small mb-8">Select a second resource to merge into the first. The source will be deleted after merging.</p>
+        <div class="merge-row">
+          <div class="merge-side">
+            <label class="section-label">Source (will be deleted)</label>
+            <div id="merge-source-label" class="id-badge-large"></div>
+          </div>
+          <div class="merge-arrow">→</div>
+          <div class="merge-side">
+            <label class="section-label">Target (kept)</label>
+            <input id="merge-target-input" type="text" class="form-input" placeholder="Enter resource ID…" list="merge-target-datalist" />
+            <datalist id="merge-target-datalist"></datalist>
+          </div>
+        </div>
+        <div class="modal-section">
+          <label class="section-label">Final ID (optional — defaults to target)</label>
+          <input id="merge-final-id" type="text" class="form-input" placeholder="Leave blank to keep target ID" />
+        </div>
+        <div id="merge-preview" class="merge-preview hidden"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="merge-btn-preview" class="btn btn-secondary">Preview</button>
+        <button id="merge-btn-confirm" class="btn btn-primary" disabled>Merge</button>
+        <button class="btn btn-secondary modal-close" data-modal="modal-merge">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Import Modal ── -->
+  <div id="modal-import" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 class="modal-title">Import Chrome Bookmarks</h2>
+        <button class="modal-close" data-modal="modal-import">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="import-step-1">
+          <p class="muted small mb-8">Folder names will be converted into tags. Existing resources will be merged.</p>
+          <div id="import-preview-info" class="info-box info-box--blue hidden"></div>
+          <button id="btn-import-preview" class="btn btn-secondary">Preview Bookmarks</button>
+        </div>
+        <div id="import-step-2" class="hidden">
+          <div id="import-summary" class="import-summary"></div>
+          <div id="import-progress" class="progress-wrap hidden">
+            <div class="progress-bar"><div id="import-progress-fill" class="progress-fill"></div></div>
+            <span id="import-progress-text" class="muted small"></span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-import-confirm" class="btn btn-primary hidden">Import All</button>
+        <button class="btn btn-secondary modal-close" data-modal="modal-import">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Migration Wizard Modal ── -->
+  <div id="modal-migration" class="modal-overlay hidden">
+    <div class="modal modal-large">
+      <div class="modal-header">
+        <h2 class="modal-title">Migration Wizard</h2>
+        <div id="migration-steps-indicator" class="steps-indicator"></div>
+        <button class="modal-close" data-modal="modal-migration">✕</button>
+      </div>
+      <div class="modal-body" id="migration-body"></div>
+      <div class="modal-footer" id="migration-footer"></div>
+    </div>
+  </div>
+
+  <!-- ── Backup Modal ── -->
+  <div id="modal-backup" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 class="modal-title">Backup & Restore</h2>
+        <button class="modal-close" data-modal="modal-backup">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="backup-section">
+          <h3 class="section-label">Export</h3>
+          <p class="muted small mb-8">Download all resources as a JSON backup file.</p>
+          <button id="btn-export-json" class="btn btn-primary">Download Backup JSON</button>
+        </div>
+        <hr class="divider" />
+        <div class="backup-section">
+          <h3 class="section-label">Import from Backup</h3>
+          <p class="muted small mb-8">Merge or replace current data from a previously exported JSON file.</p>
+          <div class="backup-mode-row">
+            <label class="checkbox-label">
+              <input type="radio" name="backup-mode" value="merge" checked /> Merge with existing
+            </label>
+            <label class="checkbox-label">
+              <input type="radio" name="backup-mode" value="replace" /> Replace all data ⚠️
+            </label>
+          </div>
+          <div class="url-add-row mt-8">
+            <input id="backup-file-input" type="file" accept=".json" class="form-input" />
+            <button id="btn-import-backup" class="btn btn-secondary btn-sm">Import</button>
+          </div>
+          <div id="backup-import-result" class="hidden"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary modal-close" data-modal="modal-backup">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Add Resource Modal ── -->
+  <div id="modal-add" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 class="modal-title">Add Resource</h2>
+        <button class="modal-close" data-modal="modal-add">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group mb-8">
+          <label class="section-label">ID / Name *</label>
+          <input id="add-id" type="text" class="form-input" placeholder="ABC-123 or custom name" />
+        </div>
+        <div class="form-group mb-8">
+          <label class="section-label">URL (optional)</label>
+          <input id="add-url" type="text" class="form-input" placeholder="https://…" />
+        </div>
+        <div class="form-group mb-8">
+          <label class="section-label">Tags (comma-separated)</label>
+          <input id="add-tags" type="text" class="form-input" placeholder="tag1, tag2" />
+        </div>
+        <div class="form-group">
+          <label class="section-label">Rating</label>
+          <div id="add-rating" class="star-input" data-value="0"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="add-btn-confirm" class="btn btn-primary">Add Resource</button>
+        <button class="btn btn-secondary modal-close" data-modal="modal-add">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Global toast ── -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script type="module" src="dashboard.js"></script>
+</body>
+</html>

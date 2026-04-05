@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Resource ID Manager</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <!-- ── Header ── -->
+  <header class="header">
+    <div class="header-left">
+      <span class="logo">RIM</span>
+      <span class="header-title">Resource ID Manager</span>
+    </div>
+    <button id="btn-dashboard" class="btn-icon" title="Open Dashboard">⊞</button>
+  </header>
+
+  <!-- ── Loading ── -->
+  <div id="state-loading" class="state-panel">
+    <div class="spinner"></div>
+    <span>Loading…</span>
+  </div>
+
+  <!-- ── System / unsupported page ── -->
+  <div id="state-system" class="state-panel hidden">
+    <div class="icon-large">🔒</div>
+    <p class="muted">This page cannot be tracked.</p>
+  </div>
+
+  <!-- ── URL is already a direct match ── -->
+  <div id="state-known" class="state-panel hidden">
+    <div class="resource-card">
+      <div class="resource-header">
+        <span id="known-id-badge" class="id-badge"></span>
+        <span id="known-pattern-tag" class="tag-pattern hidden">ID</span>
+      </div>
+      <div class="field-row">
+        <span class="field-label">URLs</span>
+        <span id="known-url-count" class="field-value muted"></span>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Titles</span>
+        <div id="known-titles" class="field-value small-list"></div>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Tags</span>
+        <div id="known-tags" class="tag-row"></div>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Rating</span>
+        <div id="known-rating-display" class="star-display"></div>
+      </div>
+    </div>
+
+    <!-- Quick edit: tags & rating -->
+    <div class="quick-edit">
+      <label class="form-label">Tags (comma-separated)</label>
+      <input id="known-tags-input" type="text" class="form-input" placeholder="tag1, tag2" />
+      <label class="form-label">Rating</label>
+      <div id="known-rating-input" class="star-input" data-value="0"></div>
+      <button id="btn-update" class="btn btn-primary btn-full">Save Changes</button>
+      <button id="btn-open-in-dashboard" class="btn btn-secondary btn-full">Open in Dashboard</button>
+    </div>
+  </div>
+
+  <!-- ── URL not found but its ID matches an existing resource ── -->
+  <div id="state-id-match" class="state-panel hidden">
+    <div class="info-box info-box--blue">
+      <span class="info-icon">🔗</span>
+      <div>
+        <strong>ID match found: <span id="id-match-id"></span></strong>
+        <p>This URL's ID matches a resource, but this URL is not yet linked.</p>
+      </div>
+    </div>
+    <button id="btn-link-url" class="btn btn-primary btn-full">Add this URL to the resource</button>
+    <button id="btn-open-matched" class="btn btn-secondary btn-full">Open in Dashboard</button>
+  </div>
+
+  <!-- ── New resource (no match) ── -->
+  <div id="state-new" class="state-panel hidden">
+    <p class="muted small">Current URL is not tracked. Add it as a resource:</p>
+
+    <div class="form-group">
+      <label class="form-label">ID / Name
+        <span id="extracted-id-badge" class="extracted-badge hidden"></span>
+      </label>
+      <input id="new-id" type="text" class="form-input" placeholder="Auto-detected or enter a name" />
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Tags (comma-separated)</label>
+      <input id="new-tags" type="text" class="form-input" placeholder="e.g. work, project" />
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Rating (optional)</label>
+      <div id="new-rating" class="star-input" data-value="0"></div>
+    </div>
+
+    <button id="btn-add" class="btn btn-primary btn-full">Add Resource</button>
+  </div>
+
+  <!-- ── Success toast ── -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
