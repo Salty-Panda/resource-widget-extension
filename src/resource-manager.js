@@ -291,12 +291,15 @@ export class ResourceManager {
   // ─── Search / filter / sort ──────────────────────────────────────────────────
 
   /**
-   * @param {string} query       text to match against id, titles, tags, urls
+   * @param {string} query
    * @param {object} filters     { tags, excludeTags, minRating, patternOnly }
    * @param {string} sort        'updatedAt' | 'createdAt' | 'rating' | 'id'
+   * @param {Function|null} tagAliasResolver  (tagGroupId: string) => string[]
+   *   Provide this so text-search can match against Tag Group aliases.
+   *   If omitted, tag IDs are searched as raw strings (fallback).
    * @returns {Resource[]}
    */
-  searchResources(query = '', filters = {}, sort = 'updatedAt') {
+  searchResources(query = '', filters = {}, sort = 'updatedAt', tagAliasResolver = null) {
     let res = Object.values(this.resources);
 
     if (query.trim()) {
@@ -304,8 +307,11 @@ export class ResourceManager {
       res = res.filter(r =>
         r.id.toLowerCase().includes(q) ||
         r.titles.some(t => t.toLowerCase().includes(q)) ||
-        r.tags.some(t => t.toLowerCase().includes(q)) ||
-        r.urls.some(u => u.toLowerCase().includes(q))
+        r.urls.some(u => u.toLowerCase().includes(q)) ||
+        r.tags.some(id => {
+          const aliases = tagAliasResolver ? tagAliasResolver(id) : [id];
+          return aliases.some(a => a.toLowerCase().includes(q));
+        })
       );
     }
 

@@ -22,6 +22,7 @@
       <div class="topbar-actions">
         <button id="btn-add-resource"  class="btn btn-primary"   title="Add resource manually">+ Add</button>
         <button id="btn-import"        class="btn btn-secondary" title="Import Chrome bookmarks">Import</button>
+        <button id="btn-tags"          class="btn btn-secondary" title="Manage Tag Groups">Tags</button>
         <button id="btn-migration"     class="btn btn-secondary" title="Migration wizard">Migrate</button>
         <button id="btn-backup"        class="btn btn-secondary" title="Backup / Restore">Backup</button>
       </div>
@@ -338,6 +339,26 @@
       <div class="modal-footer">
         <button id="add-btn-confirm" class="btn btn-primary">Add Resource</button>
         <button class="btn btn-secondary modal-close" data-modal="modal-add">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Tag Group Management Modal ── -->
+  <div id="modal-tags" class="modal-overlay hidden">
+    <div class="modal modal-large">
+      <div class="modal-header">
+        <h2 class="modal-title">Tag Groups</h2>
+        <div class="modal-header-actions">
+          <input id="tg-search" type="search" class="form-input" style="width:200px" placeholder="Filter…" />
+          <button id="tg-btn-new" class="btn btn-primary btn-sm">+ New Group</button>
+          <button class="modal-close" data-modal="modal-tags">✕</button>
+        </div>
+      </div>
+      <div class="modal-body" style="padding:0">
+        <div id="tg-list" class="tg-list"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary modal-close" data-modal="modal-tags">Close</button>
       </div>
     </div>
   </div>

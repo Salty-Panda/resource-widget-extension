@@ -439,6 +439,44 @@ a:hover { text-decoration: underline; }
 .toast.error     { border-color: var(--danger);  color: var(--danger);  }
 .toast.warn      { border-color: var(--warn);    color: var(--warn);    }
 
+/* ── Tag Group Management ────────────────────────────────────── */
+.tg-list { display: flex; flex-direction: column; }
+.tg-row {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tg-row-header {
+  display: flex; align-items: center; gap: 10px;
+}
+.tg-primary-label {
+  font-weight: 600; font-size: 13px; flex: 1; cursor: pointer;
+}
+.tg-alias-list { display: flex; flex-wrap: wrap; gap: 4px; }
+.tg-alias-chip {
+  font-size: 11px; padding: 2px 8px; border-radius: 99px;
+  background: var(--elevated); color: var(--text-sec);
+  border: 1px solid var(--border);
+  display: flex; align-items: center; gap: 4px;
+}
+.tg-alias-chip button {
+  background: none; border: none; color: var(--text-mute);
+  cursor: pointer; font-size: 12px; padding: 0; line-height: 1;
+}
+.tg-alias-chip button:hover { color: var(--danger); }
+.tg-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+.tg-expand-panel {
+  display: flex; flex-direction: column; gap: 8px;
+  background: var(--bg); border-radius: var(--radius-sm);
+  padding: 10px; margin-top: 2px;
+}
+.tg-expand-panel.hidden { display: none; }
+.tg-expand-row { display: flex; gap: 8px; align-items: center; }
+.tg-expand-row label { font-size: 11px; color: var(--text-mute); min-width: 80px; }
+.tg-expand-row .form-input { flex: 1; }
+
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track  { background: transparent; }

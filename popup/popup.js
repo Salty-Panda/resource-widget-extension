@@ -1,253 +1,284 @@
-import { ResourceManager }    from '../src/resource-manager.js';
-import { extractIdFromUrl }   from '../src/id-extractor.js';
-import { MSG }                from '../src/constants.js';
+import { ResourceManager }  from '../src/resource-manager.js';
+import { TagGroupManager }  from '../src/tag-group-manager.js';
+import { extractIdFromUrl } from '../src/id-extractor.js';
+import { MSG, STORAGE_KEYS } from '../src/constants.js';
 
-// ─── State ───────────────────────────────────────────────────────────────────
+// ─── State ────────────────────────────────────────────────────────────────────
 const rm  = new ResourceManager();
-let currentTab   = null;
-let currentState = null; // 'loading' | 'system' | 'known' | 'id-match' | 'new'
-let editResource = null; // resource object for known/id-match states
+const tgm = new TagGroupManager();
+let currentTab    = null;
+let editResource  = null;
+let pendingTagIds = []; // Tag Group IDs awaiting review
 
-// ─── Init ────────────────────────────────────────────────────────────────────
+// ─── Init ─────────────────────────────────────────────────────────────────────
 (async () => {
   await rm.initialize();
-  currentTab = await getActiveTab();
-  await determineState();
+  await tgm.initialize();
+  // One-time migration
+  if (tgm.migrateResources(rm.resources)) { await tgm.save(); await rm.save(); }
+  currentTab = await _getActiveTab();
+  await _determineState();
 })();
 
-async function getActiveTab() {
-  return new Promise(resolve => {
-    chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => resolve(tab || null));
-  });
+async function _getActiveTab() {
+  return new Promise(r => chrome.tabs.query({ active: true, currentWindow: true }, ([t]) => r(t || null)));
 }
 
-// ─── State determination ─────────────────────────────────────────────────────
-async function determineState() {
+// ─── State determination ──────────────────────────────────────────────────────
+async function _determineState() {
   const url = currentTab?.url;
-
-  if (!url || !url.startsWith('http')) {
-    showState('system');
-    return;
-  }
+  if (!url || !url.startsWith('http')) { _showState('system'); return; }
 
   // 1. Direct URL match
   const resource = rm.getResourceByUrl(url);
   if (resource) {
     editResource = resource;
-    renderKnownState(resource);
-    showState('known');
+    _renderKnownState(resource);
+    await _loadPendingTags(resource);
+    _showState('known');
     return;
   }
 
-  // 2. ID match (URL not registered but its ID belongs to an existing resource)
+  // 2. ID match (URL not registered but its ID is known)
   const extractedId = extractIdFromUrl(url);
   if (extractedId) {
     const byId = rm.getResourceById(extractedId);
     if (byId) {
       editResource = byId;
       document.getElementById('id-match-id').textContent = extractedId;
-      showState('id-match');
+      _showState('id-match');
       return;
     }
   }
 
   // 3. New resource
-  renderNewState(url, extractedId);
-  showState('new');
+  _renderNewState(url, extractedId);
+  _showState('new');
 }
 
 // ─── Render helpers ───────────────────────────────────────────────────────────
-function showState(name) {
-  currentState = name;
-  const panels = ['loading', 'system', 'known', 'id-match', 'new'];
-  panels.forEach(p => {
-    const el = document.getElementById(`state-${p}`);
-    if (el) el.classList.toggle('hidden', p !== name);
+function _showState(name) {
+  ['loading','system','known','id-match','new'].forEach(p => {
+    document.getElementById(`state-${p}`)?.classList.toggle('hidden', p !== name);
   });
 }
 
-function renderKnownState(resource) {
+function _renderKnownState(resource) {
   document.getElementById('known-id-badge').textContent = resource.id;
-
-  const patternTag = document.getElementById('known-pattern-tag');
-  patternTag.classList.toggle('hidden', !resource.isPatternId);
-
+  document.getElementById('known-pattern-tag').classList.toggle('hidden', !resource.isPatternId);
   document.getElementById('known-url-count').textContent =
     `${resource.urls.length} URL${resource.urls.length !== 1 ? 's' : ''}`;
 
   const titlesEl = document.getElementById('known-titles');
   titlesEl.innerHTML = resource.titles.length
-    ? resource.titles.slice(0, 2).map(t => `<div>${escHtml(t)}</div>`).join('')
+    ? resource.titles.slice(0, 2).map(t => `<div>${_esc(t)}</div>`).join('')
     : `<span class="muted">—</span>`;
 
   const tagsEl = document.getElementById('known-tags');
   tagsEl.innerHTML = resource.tags.length
-    ? resource.tags.map(t => `<span class="tag-chip">${escHtml(t)}</span>`).join('')
+    ? resource.tags.map(id => {
+        const label = tgm.getById(id)?.primaryLabel || id;
+        return `<span class="tag-chip">${_esc(label)}</span>`;
+      }).join('')
     : `<span class="muted small">—</span>`;
 
-  renderStarDisplay('known-rating-display', resource.rating);
+  _renderStarDisplay('known-rating-display', resource.rating);
 
-  // Populate quick-edit fields
-  document.getElementById('known-tags-input').value = resource.tags.join(', ');
-  renderStarInput('known-rating-input', resource.rating || 0);
+  // Quick-edit: show primaryLabels in text input
+  const labels = resource.tags.map(id => tgm.getById(id)?.primaryLabel || id);
+  document.getElementById('known-tags-input').value = labels.join(', ');
+  _renderStarInput('known-rating-input', resource.rating || 0);
 }
 
-function renderNewState(url, extractedId) {
+function _renderNewState(url, extractedId) {
   const idInput = document.getElementById('new-id');
   const badge   = document.getElementById('extracted-id-badge');
   if (extractedId) {
-    idInput.value = extractedId;
+    idInput.value    = extractedId;
     idInput.readOnly = true;
     badge.textContent = 'auto-detected';
     badge.classList.remove('hidden');
   } else {
-    idInput.value = '';
+    idInput.value    = '';
     idInput.readOnly = false;
     badge.classList.add('hidden');
   }
-  renderStarInput('new-rating', 0);
+  _renderStarInput('new-rating', 0);
 }
 
-// ─── Star rendering ───────────────────────────────────────────────────────────
-function renderStarDisplay(containerId, rating) {
-  const el = document.getElementById(containerId);
-  el.textContent = rating ? '★'.repeat(rating) + '☆'.repeat(5 - rating) : '—';
+// ─── Pending tags ─────────────────────────────────────────────────────────────
+async function _loadPendingTags(resource) {
+  const stored  = await chrome.storage.local.get(STORAGE_KEYS.PENDING_TAGS);
+  const all     = stored[STORAGE_KEYS.PENDING_TAGS] || {};
+  // Keep only IDs that still exist in tgm and aren't already on the resource
+  pendingTagIds = (all[resource.id] || [])
+    .filter(id => tgm.getById(id) && !resource.tags.includes(id));
+
+  const section = document.getElementById('pending-tags-section');
+  if (pendingTagIds.length === 0) { section.classList.add('hidden'); return; }
+  _renderPendingList();
+  section.classList.remove('hidden');
 }
 
-function renderStarInput(containerId, value) {
-  const el = document.getElementById(containerId);
-  el.innerHTML = '';
-  el.dataset.value = value;
-  for (let i = 1; i <= 5; i++) {
-    const star = document.createElement('span');
-    star.className = 'star' + (i <= value ? ' active' : '');
-    star.textContent = '★';
-    star.dataset.val = i;
-    el.appendChild(star);
+function _renderPendingList() {
+  const list = document.getElementById('pending-tags-list');
+  list.innerHTML = pendingTagIds.map(id => {
+    const label = tgm.getById(id)?.primaryLabel || id;
+    return `<div class="pending-tag-item">
+      <span class="pending-tag-label">${_esc(label)}</span>
+      <button class="btn-success pending-keep" data-id="${_esc(id)}">Keep ✓</button>
+      <button class="btn-ghost  pending-dismiss" data-id="${_esc(id)}">✕</button>
+    </div>`;
+  }).join('');
+
+  list.querySelectorAll('.pending-keep').forEach(btn =>
+    btn.addEventListener('click', () => _handleKeep(btn.dataset.id)));
+  list.querySelectorAll('.pending-dismiss').forEach(btn =>
+    btn.addEventListener('click', () => _handleDismiss(btn.dataset.id)));
+}
+
+async function _handleKeep(tagGroupId) {
+  if (!editResource) return;
+  if (!editResource.tags.includes(tagGroupId)) {
+    await rm.updateResource(editResource.id, {
+      tags: [...editResource.tags, tagGroupId]
+    });
+    editResource = rm.getResourceById(editResource.id);
+    _renderKnownState(editResource);
+  }
+  await _removePendingTag(tagGroupId);
+}
+
+async function _handleDismiss(tagGroupId) {
+  await _removePendingTag(tagGroupId);
+}
+
+async function _removePendingTag(tagGroupId) {
+  await chrome.runtime.sendMessage({
+    type: MSG.CLEAR_PENDING_TAG,
+    resourceId:  editResource.id,
+    tagGroupId,
+  });
+  pendingTagIds = pendingTagIds.filter(id => id !== tagGroupId);
+
+  if (pendingTagIds.length === 0) {
+    document.getElementById('pending-tags-section').classList.add('hidden');
+    chrome.action.setBadgeText({ text: '✓', tabId: currentTab.id });
+    chrome.action.setBadgeBackgroundColor({ color: '#22c55e', tabId: currentTab.id });
+  } else {
+    _renderPendingList();
   }
 }
 
-function getStarValue(containerId) {
-  return parseInt(document.getElementById(containerId).dataset.value, 10) || null;
+// ─── Star helpers ─────────────────────────────────────────────────────────────
+function _renderStarDisplay(id, rating) {
+  document.getElementById(id).textContent =
+    rating ? '★'.repeat(rating) + '☆'.repeat(5 - rating) : '—';
+}
+
+function _renderStarInput(containerId, value) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  el.innerHTML = '';
+  el.dataset.value = value;
+  for (let i = 1; i <= 5; i++) {
+    const s = document.createElement('span');
+    s.className   = 'star' + (i <= value ? ' active' : '');
+    s.textContent = '★';
+    s.dataset.val = i;
+    el.appendChild(s);
+  }
+}
+
+function _getStarValue(containerId) {
+  return parseInt(document.getElementById(containerId)?.dataset.value, 10) || null;
 }
 
 // ─── Event wiring ─────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  // Star inputs (delegated)
+  // Delegated star-input clicks
   document.addEventListener('click', e => {
     const star = e.target.closest('.star-input .star');
     if (!star) return;
-    const container = star.closest('.star-input');
+    const cont = star.closest('.star-input');
     const val  = parseInt(star.dataset.val, 10);
-    const prev = parseInt(container.dataset.value, 10);
-    const newVal = val === prev ? 0 : val; // click same → clear
-    container.dataset.value = newVal;
-    renderStarInput(container.id, newVal);
+    const prev = parseInt(cont.dataset.value, 10);
+    _renderStarInput(cont.id, val === prev ? 0 : val);
   });
 
-  // Dashboard button
-  document.getElementById('btn-dashboard').addEventListener('click', openDashboard);
-
-  // Update existing resource
-  document.getElementById('btn-update').addEventListener('click', handleUpdate);
-
-  // Open in dashboard (from known state)
+  document.getElementById('btn-dashboard').addEventListener('click', () => _openDashboard());
+  document.getElementById('btn-update').addEventListener('click',    _handleUpdate);
   document.getElementById('btn-open-in-dashboard').addEventListener('click', () =>
-    openDashboard(editResource?.id));
-
-  // Link current URL to matched resource
-  document.getElementById('btn-link-url').addEventListener('click', handleLinkUrl);
-
-  // Open matched resource in dashboard
+    _openDashboard(editResource?.id));
+  document.getElementById('btn-link-url').addEventListener('click',  _handleLinkUrl);
   document.getElementById('btn-open-matched').addEventListener('click', () =>
-    openDashboard(editResource?.id));
-
-  // Add new resource
-  document.getElementById('btn-add').addEventListener('click', handleAdd);
+    _openDashboard(editResource?.id));
+  document.getElementById('btn-add').addEventListener('click', _handleAdd);
 });
 
-// ─── Handlers ─────────────────────────────────────────────────────────────────
-async function handleUpdate() {
+// ─── Action handlers ──────────────────────────────────────────────────────────
+async function _handleUpdate() {
   if (!editResource) return;
   try {
     const rawTags = document.getElementById('known-tags-input').value;
-    const tags    = parseTags(rawTags);
-    const rating  = getStarValue('known-rating-input');
-
-    await rm.updateResource(editResource.id, { tags, rating });
-    showToast('Saved ✓', 'success');
+    const tagIds  = _parseTags(rawTags).map(label => tgm.getOrCreate(label).id);
+    await tgm.save();
+    await rm.updateResource(editResource.id, { tags: tagIds, rating: _getStarValue('known-rating-input') });
     editResource = rm.getResourceById(editResource.id);
-    renderKnownState(editResource);
-  } catch (e) {
-    showToast(e.message, 'error');
-  }
+    _renderKnownState(editResource);
+    _showToast('Saved ✓', 'success');
+  } catch (e) { _showToast(e.message, 'error'); }
 }
 
-async function handleLinkUrl() {
+async function _handleLinkUrl() {
   if (!currentTab?.url || !editResource) return;
   try {
     await rm.addUrl(currentTab.url, {});
-    showToast('URL linked ✓', 'success');
     editResource = rm.getResourceByUrl(currentTab.url);
-    renderKnownState(editResource);
-    showState('known');
-  } catch (e) {
-    showToast(e.message, 'error');
-  }
+    _renderKnownState(editResource);
+    await _loadPendingTags(editResource);
+    _showState('known');
+    _showToast('URL linked ✓', 'success');
+  } catch (e) { _showToast(e.message, 'error'); }
 }
 
-async function handleAdd() {
-  const url = currentTab?.url;
-  if (!url) return;
-
+async function _handleAdd() {
+  const url  = currentTab?.url;
+  if (!url)  return;
   const name   = document.getElementById('new-id').value.trim();
-  const rawTags = document.getElementById('new-tags').value;
-  const tags   = parseTags(rawTags);
-  const rating = getStarValue('new-rating');
+  const tagIds = _parseTags(document.getElementById('new-tags').value)
+    .map(label => tgm.getOrCreate(label).id);
+  await tgm.save();
+  const rating = _getStarValue('new-rating');
 
-  if (!name && !extractIdFromUrl(url)) {
-    showToast('Please enter a name', 'error');
-    return;
-  }
-
+  if (!name && !extractIdFromUrl(url)) { _showToast('Please enter a name', 'error'); return; }
   try {
-    const { resource } = await rm.addUrl(url, { name, tags, rating, title: currentTab.title });
+    const { resource } = await rm.addUrl(url, { name, tags: tagIds, rating, title: currentTab.title });
     editResource = resource;
-    renderKnownState(resource);
-    showState('known');
-    showToast('Resource added ✓', 'success');
-
-    // Schedule background title fetch
+    _renderKnownState(resource);
+    _showState('known');
+    _showToast('Resource added ✓', 'success');
     chrome.runtime.sendMessage({ type: MSG.SCHEDULE_TITLE_FETCH, url });
-  } catch (e) {
-    showToast(e.message, 'error');
-  }
+  } catch (e) { _showToast(e.message, 'error'); }
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function openDashboard(resourceId = null) {
+// ─── Utilities ────────────────────────────────────────────────────────────────
+function _openDashboard(resourceId = null) {
   const base = chrome.runtime.getURL('dashboard/dashboard.html');
-  const url  = resourceId ? `${base}#${encodeURIComponent(resourceId)}` : base;
-  chrome.tabs.create({ url });
+  chrome.tabs.create({ url: resourceId ? `${base}#${encodeURIComponent(resourceId)}` : base });
   window.close();
 }
 
-function parseTags(raw) {
-  return raw.split(',').map(t => t.trim()).filter(Boolean);
+function _parseTags(raw) { return raw.split(',').map(t => t.trim()).filter(Boolean); }
+function _esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-function escHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-let toastTimer = null;
-function showToast(msg, type = '') {
+let _toastTimer;
+function _showToast(msg, type = '') {
   const el = document.getElementById('toast');
   el.textContent = msg;
-  el.className = `toast${type ? ' ' + type : ''}`;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.add('hidden'), 2200);
+  el.className   = `toast${type ? ' ' + type : ''}`;
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.add('hidden'), 2200);
 }
