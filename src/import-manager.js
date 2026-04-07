@@ -44,7 +44,12 @@ export class ImportManager {
     for (const node of nodes) {
       if (node.url) {
         if (isValidUrl(node.url)) {
-          items.push({ url: node.url, title: node.title || '', tags: [...parentTags] });
+          items.push({
+            url:       node.url,
+            title:     node.title || '',
+            tags:      [...parentTags],
+            dateAdded: node.dateAdded || null,   // ms since epoch, provided by Chrome
+          });
         }
       } else if (node.children) {
         const folderTag  = (node.title || '').trim();
@@ -69,11 +74,14 @@ export class ImportManager {
     let imported = 0, merged = 0, skipped = 0;
 
     for (let i = 0; i < items.length; i++) {
-      const { url, title, tags: rawLabels } = items[i];
+      const { url, title, tags: rawLabels, dateAdded } = items[i];
       try {
-        // Resolve raw label strings → Tag Group IDs (create groups if needed)
         const tagIds = rawLabels.map(label => this.tgm.getOrCreate(label).id);
-        const result = await this.rm.addUrl(url, { tags: tagIds, title });
+        const result = await this.rm.addUrl(url, {
+          tags:      tagIds,
+          title,
+          createdAt: dateAdded || null,
+        });
         if (result.created) imported++;
         else if (result.merged) merged++;
         else skipped++;

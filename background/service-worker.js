@@ -102,28 +102,32 @@ async function _scanPageForTags(tabId, url, resourceId) {
 
 /**
  * Self-contained — injected into the page via chrome.scripting.
+ * Recursively walks the entire body, collects all visible text nodes.
+ * No fixed selectors, no depth assumptions.
  * Must NOT reference any variables outside this function.
  */
 function _extractVisibleText() {
   try {
-    const els = document.querySelectorAll('h1,h2,h3,h4,h5,h6,p,article,section,main,li,td,th');
-    const out = [];
-    for (const el of els) {
-      let skip = false, anc = el.parentElement;
-      while (anc) {
-        const t = (anc.tagName || '').toLowerCase();
-        if (t === 'script' || t === 'style' || t === 'noscript') { skip = true; break; }
-        anc = anc.parentElement;
+    const SKIP = new Set(['SCRIPT','STYLE','NOSCRIPT','HEAD','IFRAME','OBJECT','EMBED','TEMPLATE','SVG']);
+    let text = '';
+
+    function walk(node) {
+      if (node.nodeType === 3) { // TEXT_NODE
+        const t = (node.nodeValue || '').trim();
+        if (t) text += t + ' ';
+        return;
       }
-      if (skip) continue;
+      if (node.nodeType !== 1) return; // not ELEMENT_NODE
+      if (SKIP.has(node.tagName)) return;
       try {
-        const cs = window.getComputedStyle(el);
-        if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+        const cs = window.getComputedStyle(node);
+        if (cs.display === 'none' || cs.visibility === 'hidden') return;
       } catch (_) {}
-      const text = (el.textContent || '').trim();
-      if (text.length > 0) out.push(text);
+      for (let i = 0; i < node.childNodes.length; i++) walk(node.childNodes[i]);
     }
-    return out.slice(0, 300).join(' ').slice(0, 50000);
+
+    if (document.body) walk(document.body);
+    return text.slice(0, 100000);
   } catch (_) { return ''; }
 }
 

@@ -39,11 +39,19 @@ export function isValidUrl(str) {
 }
 
 /**
- * Sort URLs by preferred domains (first match = highest priority).
+ * Select the single best URL from a list using priority domain order.
+ * Returns the first URL that matches the highest-priority domain,
+ * or the first URL in the list if no priority match exists.
+ * Returns null for an empty list.
  * @param {string[]} urls
  * @param {string[]} priorityDomains
- * @returns {string[]}
+ * @returns {string|null}
  */
+export function selectUrlByPriority(urls, priorityDomains = []) {
+  if (!urls || urls.length === 0) return null;
+  const sorted = sortUrlsByPriority(urls, priorityDomains);
+  return sorted[0];
+}
 export function sortUrlsByPriority(urls, priorityDomains = []) {
   if (!priorityDomains.length) return [...urls];
   return [...urls].sort((a, b) => {

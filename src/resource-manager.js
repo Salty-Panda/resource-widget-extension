@@ -98,7 +98,7 @@ export class ResourceManager {
    */
   async addUrl(url, options = {}) {
     const nUrl  = normalizeUrl(url);
-    const { tags = [], rating = null, title = null, name = null } = options;
+    const { tags = [], rating = null, title = null, name = null, createdAt = null } = options;
 
     // 1. URL already known
     const existingId = this.urlIndex[nUrl];
@@ -129,7 +129,7 @@ export class ResourceManager {
         return { resource: res, created: false, merged: true };
       }
       // Create new resource with extracted ID
-      return this._createResource(extractedId, nUrl, { tags, rating, title });
+      return this._createResource(extractedId, nUrl, { tags, rating, title, createdAt });
     }
 
     // 4. Manual-name resource
@@ -141,10 +141,10 @@ export class ResourceManager {
       while (this.resources[`${resourceId}_${n}`]) n++;
       resourceId = `${resourceId}_${n}`;
     }
-    return this._createResource(resourceId, nUrl, { tags, rating, title });
+    return this._createResource(resourceId, nUrl, { tags, rating, title, createdAt });
   }
 
-  async _createResource(id, url, { tags = [], rating = null, title = null } = {}) {
+  async _createResource(id, url, { tags = [], rating = null, title = null, createdAt = null } = {}) {
     const now = Date.now();
     const resource = {
       id,
@@ -153,7 +153,7 @@ export class ResourceManager {
       titles:      title ? [title] : [],
       tags:        [...new Set(tags)],
       rating,
-      createdAt:   now,
+      createdAt:   createdAt || now,
       updatedAt:   now,
     };
     this.resources[id] = resource;

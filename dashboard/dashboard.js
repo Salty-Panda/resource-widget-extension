@@ -4,7 +4,7 @@ import { ImportManager }    from '../src/import-manager.js';
 import { MigrationManager } from '../src/migration-manager.js';
 import { BackupManager }    from '../src/backup-manager.js';
 import { normalizeId }      from '../src/id-extractor.js';
-import { isValidUrl, normalizeUrl } from '../src/url-utils.js';
+import { isValidUrl, normalizeUrl, selectUrlByPriority, getDomain } from '../src/url-utils.js';
 
 // ─── Managers ────────────────────────────────────────────────────────────────
 const rm  = new ResourceManager();
@@ -82,6 +82,8 @@ function renderTable() {
       if (res) openResourceModal(res);
     });
   });
+  tbody.querySelectorAll('.btn-row-incognito').forEach(btn =>
+    btn.addEventListener('click', e => { e.stopPropagation(); openInIncognito(btn.dataset.id); }));
   tbody.querySelectorAll('.btn-row-delete').forEach(btn =>
     btn.addEventListener('click', e => { e.stopPropagation(); confirmDeleteResource(btn.dataset.id); }));
 }
@@ -101,7 +103,8 @@ function renderRow(r) {
     <td class="rating-cell" style="text-align:center">${esc(rating)}</td>
     <td class="urls-count">${r.urls.length}</td>
     <td><div class="row-actions">
-      <button class="btn btn-danger btn-sm btn-row-delete" data-id="${esc(r.id)}">✕</button>
+      <button class="btn btn-secondary btn-sm btn-row-incognito" data-id="${esc(r.id)}" title="Open in incognito">🕵</button>
+      <button class="btn btn-danger btn-sm btn-row-delete" data-id="${esc(r.id)}" title="Delete">✕</button>
     </div></td>
   </tr>`;
 }
@@ -608,6 +611,168 @@ function getStarValue(id) { return parseInt(document.getElementById(id)?.dataset
 function openModal(id)  { document.getElementById(id)?.classList.remove('hidden'); }
 function closeModal(id) { document.getElementById(id)?.classList.add('hidden'); if (id === 'modal-resource') location.hash = ''; }
 
+// ─── Incognito opener ─────────────────────────────────────────────────────────
+
+/**
+ * Open `url` in incognito.
+ * Reuses an existing incognito window (new tab) when one is open;
+ * otherwise creates a new incognito window.
+ * Never opens a regular tab.
+ * @param {string} url
+ */
+async function _openUrlInIncognito(url) {
+  const all          = await chrome.windows.getAll({ windowTypes: ['normal'] });
+  const incognitoWin = all.find(w => w.incognito);
+  if (incognitoWin) {
+    await chrome.tabs.create({ windowId: incognitoWin.id, url });
+  } else {
+    await chrome.windows.create({ url, incognito: true });
+  }
+}
+
+async function openInIncognito(resourceId) {
+  const res = rm.getResourceById(resourceId);
+  if (!res || !res.urls.length) { showToast('No URLs available for this resource', 'error'); return; }
+  const url = selectUrlByPriority(res.urls, rm.settings.priorityDomains || []);
+  if (!url) { showToast('No URL to open', 'error'); return; }
+  try {
+    await _openUrlInIncognito(url);
+  } catch (e) {
+    showToast(`Cannot open incognito: ${e.message}`, 'error');
+  }
+}
+
+// ─── Random unrated resource ──────────────────────────────────────────────────
+async function openRandomUnrated() {
+  const unrated = rm.getAllResources().filter(r => r.rating === null && r.urls.length > 0);
+  if (!unrated.length) { showToast('No unrated resources with URLs', 'warn'); return; }
+
+  // Pick up to 3 random candidates
+  const shuffled   = [...unrated].sort(() => Math.random() - 0.5);
+  const candidates = shuffled.slice(0, 3);
+  // Among the candidates, pick the one with the oldest createdAt
+  candidates.sort((a, b) => a.createdAt - b.createdAt);
+  const selected = candidates[0];
+
+  const url = selectUrlByPriority(selected.urls, rm.settings.priorityDomains || []);
+  try {
+    await _openUrlInIncognito(url);
+    showToast(`Opening: ${selected.id}`, 'success');
+  } catch (e) {
+    showToast(`Cannot open incognito: ${e.message}`, 'error');
+  }
+}
+
+// ─── Settings Modal (Priority Domains) ───────────────────────────────────────
+
+// Local copy of the domains list while the modal is open
+let _editingDomains = [];
+
+function openSettingsModal() {
+  _editingDomains = [...(rm.settings.priorityDomains || [])];
+  _renderPriorityDomains();
+  document.getElementById('priority-domain-input').value = '';
+  openModal('modal-settings');
+}
+
+function _renderPriorityDomains() {
+  const list = document.getElementById('priority-domains-list');
+  if (!_editingDomains.length) {
+    list.innerHTML = '<p class="muted small">No domains defined. Add one below.</p>';
+    return;
+  }
+  list.innerHTML = _editingDomains.map((domain, i) => `
+    <div class="priority-item" data-index="${i}">
+      <span class="priority-num">${i + 1}.</span>
+      <span class="priority-domain">${esc(domain)}</span>
+      <button class="pd-up"   data-i="${i}" title="Move up"   ${i === 0 ? 'disabled' : ''}>↑</button>
+      <button class="pd-down" data-i="${i}" title="Move down" ${i === _editingDomains.length - 1 ? 'disabled' : ''}>↓</button>
+      <button class="pd-del"  data-i="${i}" title="Remove">✕</button>
+    </div>`).join('');
+
+  list.querySelectorAll('.pd-up').forEach(btn =>
+    btn.addEventListener('click', () => {
+      const i = +btn.dataset.i;
+      [_editingDomains[i - 1], _editingDomains[i]] = [_editingDomains[i], _editingDomains[i - 1]];
+      _renderPriorityDomains();
+    }));
+  list.querySelectorAll('.pd-down').forEach(btn =>
+    btn.addEventListener('click', () => {
+      const i = +btn.dataset.i;
+      [_editingDomains[i], _editingDomains[i + 1]] = [_editingDomains[i + 1], _editingDomains[i]];
+      _renderPriorityDomains();
+    }));
+  list.querySelectorAll('.pd-del').forEach(btn =>
+    btn.addEventListener('click', () => {
+      _editingDomains.splice(+btn.dataset.i, 1);
+      _renderPriorityDomains();
+    }));
+}
+
+async function saveSettings() {
+  rm.settings.priorityDomains = [..._editingDomains];
+  await rm.saveSettings();
+  closeModal('modal-settings');
+  showToast('Settings saved ✓', 'success');
+}
+
+// ─── Bulk URL Removal ─────────────────────────────────────────────────────────
+
+function _parseDomainInput() {
+  const raw = document.getElementById('bulk-remove-domains').value;
+  return raw.split(/[\n,]/).map(d => d.trim().toLowerCase()).filter(Boolean);
+}
+
+async function previewBulkRemoval() {
+  const domains = _parseDomainInput();
+  const preview = document.getElementById('bulk-remove-preview');
+  if (!domains.length) { showToast('Enter at least one domain', 'error'); return; }
+
+  let urlCount = 0, resCount = 0;
+  for (const res of rm.getAllResources()) {
+    const matches = res.urls.filter(url => {
+      try { return domains.includes(new URL(url).hostname.toLowerCase()); } catch { return false; }
+    });
+    if (matches.length) { urlCount += matches.length; resCount++; }
+  }
+
+  preview.classList.remove('hidden');
+  preview.innerHTML = `<div class="bulk-preview-box">
+    Found <strong>${urlCount}</strong> URL(s) across <strong>${resCount}</strong> resource(s) to remove.
+    ${urlCount === 0 ? '<br><span class="muted">Nothing to remove.</span>' : ''}
+  </div>`;
+  document.getElementById('btn-bulk-remove-confirm').disabled = urlCount === 0;
+}
+
+async function executeBulkRemoval() {
+  const domains = _parseDomainInput();
+  if (!domains.length) return;
+  const domainSet = new Set(domains);
+
+  let removed = 0, affected = 0;
+  for (const res of Object.values(rm.resources)) {
+    const before = res.urls.length;
+    const keep   = res.urls.filter(url => {
+      try { return !domainSet.has(new URL(url).hostname.toLowerCase()); } catch { return true; }
+    });
+    if (keep.length < before) {
+      // Clean up URL index for removed URLs
+      for (const url of res.urls) {
+        if (!keep.includes(url)) delete rm.urlIndex[url];
+      }
+      res.urls      = keep;
+      res.updatedAt = Date.now();
+      removed += before - keep.length;
+      affected++;
+    }
+  }
+  if (removed > 0) await rm.save();
+
+  closeModal('modal-bulk-remove');
+  showToast(`Removed ${removed} URL(s) from ${affected} resource(s)`, removed ? 'success' : 'warn');
+  loadAll();
+}
+
 // ─── Static event bindings ────────────────────────────────────────────────────
 function bindStaticEvents() {
   // Search
@@ -696,6 +861,31 @@ function bindStaticEvents() {
   document.getElementById('btn-tags').addEventListener('click', openTagsModal);
   document.getElementById('btn-migration').addEventListener('click', openMigrationWizard);
   document.getElementById('btn-backup').addEventListener('click', () => openModal('modal-backup'));
+  document.getElementById('btn-random-unrated').addEventListener('click', openRandomUnrated);
+  document.getElementById('btn-settings').addEventListener('click', openSettingsModal);
+  document.getElementById('btn-bulk-remove').addEventListener('click', () => {
+    document.getElementById('bulk-remove-domains').value = '';
+    document.getElementById('bulk-remove-preview').classList.add('hidden');
+    document.getElementById('btn-bulk-remove-confirm').disabled = true;
+    openModal('modal-bulk-remove');
+  });
+
+  // Settings modal
+  document.getElementById('btn-add-priority-domain').addEventListener('click', () => {
+    const input  = document.getElementById('priority-domain-input');
+    const domain = input.value.trim().toLowerCase();
+    if (!domain) return;
+    if (!_editingDomains.includes(domain)) { _editingDomains.push(domain); _renderPriorityDomains(); }
+    input.value = '';
+  });
+  document.getElementById('priority-domain-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('btn-add-priority-domain').click();
+  });
+  document.getElementById('btn-save-settings').addEventListener('click', saveSettings);
+
+  // Bulk-remove modal
+  document.getElementById('btn-bulk-remove-preview').addEventListener('click', previewBulkRemoval);
+  document.getElementById('btn-bulk-remove-confirm').addEventListener('click', executeBulkRemoval);
 
   // Tags modal search
   document.getElementById('tg-search').addEventListener('input', e => renderTagGroupList(e.target.value));

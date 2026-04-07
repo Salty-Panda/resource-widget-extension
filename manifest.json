@@ -10,7 +10,8 @@
     "tabs",
     "activeTab",
     "scripting",
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "windows"
   ],
   "host_permissions": [
     "<all_urls>"

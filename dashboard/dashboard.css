@@ -477,6 +477,29 @@ a:hover { text-decoration: underline; }
 .tg-expand-row label { font-size: 11px; color: var(--text-mute); min-width: 80px; }
 .tg-expand-row .form-input { flex: 1; }
 
+/* ── Priority domain list ────────────────────────────────────── */
+.priority-list { display: flex; flex-direction: column; gap: 4px; }
+.priority-item {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--elevated); border-radius: var(--radius-sm);
+  padding: 5px 10px;
+}
+.priority-num  { font-size: 11px; color: var(--text-mute); min-width: 20px; }
+.priority-domain { flex: 1; font-size: 13px; color: var(--text-sec); }
+.priority-item button {
+  background: none; border: 1px solid var(--border); color: var(--text-mute);
+  border-radius: var(--radius-sm); cursor: pointer; font-size: 12px;
+  padding: 2px 6px; transition: color .12s, border-color .12s;
+}
+.priority-item button:hover { color: var(--text); border-color: var(--accent); }
+.priority-item button:disabled { opacity: .3; cursor: not-allowed; }
+
+/* ── Bulk-remove preview ─────────────────────────────────────── */
+.bulk-preview-box {
+  background: var(--elevated); border-radius: var(--radius);
+  padding: 10px 12px; font-size: 12px; color: var(--text-sec);
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track  { background: transparent; }

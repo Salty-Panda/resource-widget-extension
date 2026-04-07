@@ -20,11 +20,14 @@
         <input id="search-input" type="search" placeholder="Search by ID, title, tag, URL…" autocomplete="off" />
       </div>
       <div class="topbar-actions">
-        <button id="btn-add-resource"  class="btn btn-primary"   title="Add resource manually">+ Add</button>
-        <button id="btn-import"        class="btn btn-secondary" title="Import Chrome bookmarks">Import</button>
-        <button id="btn-tags"          class="btn btn-secondary" title="Manage Tag Groups">Tags</button>
-        <button id="btn-migration"     class="btn btn-secondary" title="Migration wizard">Migrate</button>
-        <button id="btn-backup"        class="btn btn-secondary" title="Backup / Restore">Backup</button>
+        <button id="btn-add-resource"    class="btn btn-primary"   title="Add resource manually">+ Add</button>
+        <button id="btn-import"          class="btn btn-secondary" title="Import Chrome bookmarks">Import</button>
+        <button id="btn-tags"            class="btn btn-secondary" title="Manage Tag Groups">Tags</button>
+        <button id="btn-migration"       class="btn btn-secondary" title="Migration wizard">Migrate</button>
+        <button id="btn-backup"          class="btn btn-secondary" title="Backup / Restore">Backup</button>
+        <button id="btn-random-unrated"  class="btn btn-secondary" title="Open a random unrated resource in incognito">🎲 Random</button>
+        <button id="btn-settings"        class="btn btn-secondary" title="Priority URL domain settings">⚙ Settings</button>
+        <button id="btn-bulk-remove"     class="btn btn-secondary" title="Remove URLs by domain from all resources">Bulk Remove</button>
       </div>
     </header>
 
@@ -359,6 +362,56 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary modal-close" data-modal="modal-tags">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Settings Modal (Priority URL Domains) ── -->
+  <div id="modal-settings" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 class="modal-title">Settings — Priority URL Domains</h2>
+        <button class="modal-close" data-modal="modal-settings">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="muted small mb-8">
+          When opening a resource, the URL whose domain ranks highest in this list is preferred.
+          Drag-free reordering via ↑ / ↓ arrows.
+        </p>
+        <div id="priority-domains-list" class="priority-list"></div>
+        <div class="url-add-row mt-8">
+          <input id="priority-domain-input" type="text" class="form-input" placeholder="example.com" />
+          <button id="btn-add-priority-domain" class="btn btn-secondary btn-sm">Add</button>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-save-settings" class="btn btn-primary">Save</button>
+        <button class="btn btn-secondary modal-close" data-modal="modal-settings">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Bulk URL Removal Modal ── -->
+  <div id="modal-bulk-remove" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 class="modal-title">Bulk URL Removal</h2>
+        <button class="modal-close" data-modal="modal-bulk-remove">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="muted small mb-8">
+          Removes all URLs matching the given domains from every resource.
+          Resources with no remaining URLs are <strong>not</strong> deleted.
+        </p>
+        <label class="section-label">Domains (one per line or comma-separated)</label>
+        <textarea id="bulk-remove-domains" class="form-input" rows="4"
+          placeholder="example.com&#10;old-site.org"></textarea>
+        <div id="bulk-remove-preview" class="hidden mt-8"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-bulk-remove-preview" class="btn btn-secondary">Preview</button>
+        <button id="btn-bulk-remove-confirm" class="btn btn-danger" disabled>Remove URLs</button>
+        <button class="btn btn-secondary modal-close" data-modal="modal-bulk-remove">Cancel</button>
       </div>
     </div>
   </div>
