@@ -53,19 +53,15 @@
       </div>
     </div>
 
-    <!-- Pending auto-detected tags -->
-    <div id="pending-tags-section" class="pending-section hidden">
-      <div class="pending-header">
-        <span>🏷️</span>
-        <span>Auto-detected tags — review</span>
-      </div>
-      <div id="pending-tags-list" class="pending-list"></div>
-    </div>
+    <!-- Pending auto-detected tags — handled by chip input, section removed -->
 
     <!-- Quick edit: tags & rating -->
     <div class="quick-edit">
-      <label class="form-label">Tags (comma-separated)</label>
-      <input id="known-tags-input" type="text" class="form-input" placeholder="tag1, tag2" />
+      <label class="form-label">Tags</label>
+      <div class="chip-input-wrap" id="known-chip-wrap">
+        <input class="chip-text-input" id="known-chip-text" placeholder="Add tag…" autocomplete="off" />
+        <div class="ac-dropdown hidden" id="known-ac-drop"></div>
+      </div>
       <label class="form-label">Rating</label>
       <div id="known-rating-input" class="star-input" data-value="0"></div>
       <button id="btn-update" class="btn btn-primary btn-full">Save Changes</button>
@@ -98,8 +94,11 @@
     </div>
 
     <div class="form-group">
-      <label class="form-label">Tags (comma-separated)</label>
-      <input id="new-tags" type="text" class="form-input" placeholder="e.g. work, project" />
+      <label class="form-label">Tags</label>
+      <div class="chip-input-wrap" id="new-chip-wrap">
+        <input class="chip-text-input" id="new-chip-text" placeholder="Add tag…" autocomplete="off" />
+        <div class="ac-dropdown hidden" id="new-ac-drop"></div>
+      </div>
     </div>
 
     <div class="form-group">

@@ -69,7 +69,7 @@ async function _scanPageForTags(tabId, url, resourceId) {
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
-      func:   _extractVisibleText,
+      func:   _extractStructuredValues,
     });
     pageText = results?.[0]?.result || '';
   } catch {
@@ -102,32 +102,119 @@ async function _scanPageForTags(tabId, url, resourceId) {
 
 /**
  * Self-contained — injected into the page via chrome.scripting.
- * Recursively walks the entire body, collects all visible text nodes.
- * No fixed selectors, no depth assumptions.
+ *
+ * Extracts VALUES from structured label-value data ONLY.
+ * Scanned structures:
+ *   1. HTML tables   — first cell per row = label (skipped), rest = values
+ *   2. Definition lists — <dd> = values  (<dt> ignored)
+ *   3. <label> elements — 'for'-target or next visible sibling = value
+ *   4. Colon-labeled adjacent pairs — element whose trimmed text ends with ':'
+ *      (short, ≤ 2 children) is treated as a label; its next visible sibling
+ *      is the value
+ *
+ * Text inside <a> links is included (anchor text = structured value).
+ * Returns '' when no structured data is found — no fallback to general scanning.
  * Must NOT reference any variables outside this function.
  */
-function _extractVisibleText() {
+function _extractStructuredValues() {
   try {
-    const SKIP = new Set(['SCRIPT','STYLE','NOSCRIPT','HEAD','IFRAME','OBJECT','EMBED','TEMPLATE','SVG']);
-    let text = '';
+    // Completely skip these subtrees when traversing for label-value pairs
+    const TRAVERSE_SKIP = new Set([
+      'SCRIPT','STYLE','NOSCRIPT','HEAD','IFRAME','TEMPLATE','NAV','FOOTER',
+    ]);
+    // Skip these when extracting inner text
+    const TEXT_SKIP = new Set([
+      'SCRIPT','STYLE','NOSCRIPT','HEAD','IFRAME','TEMPLATE',
+    ]);
 
-    function walk(node) {
-      if (node.nodeType === 3) { // TEXT_NODE
-        const t = (node.nodeValue || '').trim();
-        if (t) text += t + ' ';
-        return;
-      }
-      if (node.nodeType !== 1) return; // not ELEMENT_NODE
-      if (SKIP.has(node.tagName)) return;
+    function isVisible(el) {
       try {
-        const cs = window.getComputedStyle(node);
-        if (cs.display === 'none' || cs.visibility === 'hidden') return;
-      } catch (_) {}
-      for (let i = 0; i < node.childNodes.length; i++) walk(node.childNodes[i]);
+        const cs = window.getComputedStyle(el);
+        return cs.display !== 'none' && cs.visibility !== 'hidden';
+      } catch (_) { return true; }
     }
 
-    if (document.body) walk(document.body);
-    return text.slice(0, 100000);
+    // Recursively extract all text including text inside <a> links
+    function innerText(el) {
+      let t = '';
+      for (const n of el.childNodes) {
+        if (n.nodeType === 3) {
+          t += n.nodeValue;
+        } else if (n.nodeType === 1 && !TEXT_SKIP.has(n.tagName)) {
+          t += innerText(n);
+        }
+      }
+      return t.replace(/\s+/g, ' ').trim();
+    }
+
+    const values = new Set();
+
+    function addValue(el) {
+      if (!el || !isVisible(el)) return;
+      const t = innerText(el);
+      if (t && t.length >= 1 && t.length < 500) values.add(t);
+    }
+
+    // ── 1. HTML tables ───────────────────────────────────────────────────────
+    // First cell in each row = label → skip. Remaining cells = values.
+    document.querySelectorAll('tr').forEach(row => {
+      if (!isVisible(row)) return;
+      const cells = [...row.querySelectorAll(':scope > th, :scope > td')];
+      if (cells.length < 2) return;
+      cells.slice(1).forEach(addValue);
+    });
+
+    // ── 2. Definition lists ──────────────────────────────────────────────────
+    // <dt> = label (ignored), <dd> = value (extracted)
+    document.querySelectorAll('dd').forEach(addValue);
+
+    // ── 3. HTML <label> elements ─────────────────────────────────────────────
+    // Resolve value via 'for' attribute, or fall back to next visible sibling.
+    document.querySelectorAll('label').forEach(lbl => {
+      if (!isVisible(lbl)) return;
+      const forId = lbl.getAttribute('for');
+      if (forId) {
+        const target = document.getElementById(forId);
+        if (target) { addValue(target); return; }
+      }
+      let sib = lbl.nextElementSibling;
+      while (sib && !isVisible(sib)) sib = sib.nextElementSibling;
+      if (sib) addValue(sib);
+    });
+
+    // ── 4. Adjacent colon-labeled pairs ──────────────────────────────────────
+    // An element whose trimmed text ends with ':' and is short (≤100 chars,
+    // ≤2 child elements) is treated as a label.
+    // Its next visible sibling is treated as the value.
+    function scanForPairs(container) {
+      if (!container || TRAVERSE_SKIP.has(container.tagName)) return;
+      const children = [...container.children];
+      for (let i = 0; i < children.length; i++) {
+        const el = children[i];
+        if (!isVisible(el)) continue;
+        // Tables and DLs are already covered above — don't re-enter them
+        if (['TABLE','DL','TR','THEAD','TBODY','TFOOT'].includes(el.tagName)) continue;
+
+        const t = innerText(el).trim();
+        if (t.endsWith(':') && t.length <= 100 && el.children.length <= 2) {
+          // This element is a label — next visible sibling is the value
+          for (let j = i + 1; j < children.length; j++) {
+            if (isVisible(children[j])) {
+              addValue(children[j]);
+              break;
+            }
+          }
+        } else {
+          scanForPairs(el); // recurse into non-label container elements
+        }
+      }
+    }
+    if (document.body) scanForPairs(document.body);
+
+    // If nothing was found in any structured section, return empty string.
+    // The caller will find no matches and do nothing — no fallback to free text.
+    if (values.size === 0) return '';
+    return [...values].join('\n').slice(0, 100000);
   } catch (_) { return ''; }
 }
 
