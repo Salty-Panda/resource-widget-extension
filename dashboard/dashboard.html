@@ -237,28 +237,35 @@
 
   <!-- ── Import Modal ── -->
   <div id="modal-import" class="modal-overlay hidden">
-    <div class="modal">
+    <div class="modal modal-xl">
       <div class="modal-header">
-        <h2 class="modal-title">Import Chrome Bookmarks</h2>
-        <button class="modal-close" data-modal="modal-import">✕</button>
-      </div>
-      <div class="modal-body">
-        <div id="import-step-1">
-          <p class="muted small mb-8">Folder names will be converted into tags. Existing resources will be merged.</p>
-          <div id="import-preview-info" class="info-box info-box--blue hidden"></div>
-          <button id="btn-import-preview" class="btn btn-secondary">Preview Bookmarks</button>
-        </div>
-        <div id="import-step-2" class="hidden">
-          <div id="import-summary" class="import-summary"></div>
-          <div id="import-progress" class="progress-wrap hidden">
-            <div class="progress-bar"><div id="import-progress-fill" class="progress-fill"></div></div>
-            <span id="import-progress-text" class="muted small"></span>
-          </div>
+        <h2 class="modal-title">Import Bookmarks</h2>
+        <div class="modal-header-actions">
+          <span id="import-sel-count" class="tree-sel-count"></span>
+          <button class="modal-close" data-modal="modal-import">✕</button>
         </div>
       </div>
+
+      <!-- Loading state -->
+      <div id="import-loading" class="import-loading-state">Loading bookmarks…</div>
+
+      <!-- Tree view (flex: 1, scrollable) -->
+      <div id="import-tree-body" class="import-tree-body hidden"></div>
+
+      <!-- Progress state (shown during import) -->
+      <div id="import-progress-body" class="modal-body hidden">
+        <div class="progress-wrap">
+          <div class="progress-bar"><div id="import-progress-fill" class="progress-fill"></div></div>
+          <span id="import-progress-text" class="muted small"></span>
+        </div>
+      </div>
+
       <div class="modal-footer">
-        <button id="btn-import-confirm" class="btn btn-primary hidden">Import All</button>
-        <button class="btn btn-secondary modal-close" data-modal="modal-import">Close</button>
+        <button id="btn-import-select-all"   class="btn btn-secondary btn-sm">Select All</button>
+        <button id="btn-import-deselect-all" class="btn btn-secondary btn-sm">Deselect All</button>
+        <span style="flex:1"></span>
+        <button id="btn-import-confirm" class="btn btn-primary" disabled>Import Selected</button>
+        <button class="btn btn-secondary modal-close" data-modal="modal-import">Cancel</button>
       </div>
     </div>
   </div>

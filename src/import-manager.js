@@ -107,4 +107,88 @@ export class ImportManager {
       detectedId: extractIdFromUrl(item.url),
     }));
   }
+
+  /**
+   * Build a nested display tree from the raw Chrome bookmark tree.
+   * Each node: { nodeId, title, url, isFolder, children, parentTags, dateAdded }
+   *   - nodeId:     unique string identifier for DOM / state tracking
+   *   - parentTags: accumulated folder labels at depth >= 2 (used as tags on import)
+   *   - depth 0     Chrome synthetic root  → skipped (children flattened up)
+   *   - depth 1     System folders (Bookmarks bar, etc.) → shown, not tagged
+   *   - depth >= 2  User-defined folders → shown AND tagged
+   * @param {chrome.bookmarks.BookmarkTreeNode[]} nodes
+   * @param {number}   depth
+   * @param {string[]} parentTags
+   * @returns {object[]}
+   */
+  buildDisplayTree(nodes, depth = 0, parentTags = []) {
+    const result = [];
+    for (const node of nodes) {
+      if (node.url) {
+        // Bookmark leaf
+        if (isValidUrl(node.url)) {
+          result.push({
+            nodeId:     `bm_${node.id}`,
+            title:      node.title || node.url,
+            url:        node.url,
+            isFolder:   false,
+            children:   [],
+            parentTags: [...parentTags],
+            dateAdded:  node.dateAdded  || null,
+          });
+        }
+      } else if (node.children) {
+        const folderLabel = (node.title || '').trim();
+        const addAsTag    = depth >= 2 && folderLabel.length > 0;
+        const childTags   = addAsTag ? [...parentTags, folderLabel] : [...parentTags];
+        if (depth >= 1) {
+          // Show this folder in the tree
+          result.push({
+            nodeId:     `f_${node.id}`,
+            title:      folderLabel || 'Folder',
+            url:        null,
+            isFolder:   true,
+            isTaggable: addAsTag,
+            children:   this.buildDisplayTree(node.children, depth + 1, childTags),
+            parentTags: [...parentTags],
+            dateAdded:  node.dateAdded || null,
+          });
+        } else {
+          // depth 0 = Chrome root wrapper: flatten its children
+          result.push(...this.buildDisplayTree(node.children, depth + 1, childTags));
+        }
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Import only the provided selection of bookmark items.
+   * Each item: { url, title, tags: string[], dateAdded }
+   * Tags are raw folder-name strings that are resolved to Tag Group IDs here.
+   * @param {{ url:string, title:string, tags:string[], dateAdded:number|null }[]} selectedItems
+   * @param {{ onProgress?: (done:number, total:number) => void }} options
+   * @returns {Promise<{ imported:number, merged:number, skipped:number }>}
+   */
+  async importSelected(selectedItems, options = {}) {
+    const total = selectedItems.length;
+    let imported = 0, merged = 0, skipped = 0;
+    for (let i = 0; i < total; i++) {
+      const { url, title, tags: rawLabels, dateAdded } = selectedItems[i];
+      try {
+        const tagIds = rawLabels.map(label => this.tgm.getOrCreate(label).id);
+        const result = await this.rm.addUrl(url, {
+          tags:      tagIds,
+          title,
+          createdAt: dateAdded || null,
+        });
+        if (result.created) imported++;
+        else if (result.merged) merged++;
+        else skipped++;
+      } catch { skipped++; }
+      options.onProgress?.(i + 1, total);
+    }
+    await this.tgm.save();
+    return { imported, merged, skipped };
+  }
 }

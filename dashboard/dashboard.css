@@ -500,6 +500,51 @@ a:hover { text-decoration: underline; }
   padding: 10px 12px; font-size: 12px; color: var(--text-sec);
 }
 
+/* ── Import bookmark tree ────────────────────────────────────── */
+.modal-xl { width: 860px; }
+
+.import-loading-state {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  padding: 60px 20px; color: var(--text-mute); font-size: 13px;
+}
+.import-tree-body {
+  flex: 1; overflow-y: auto; padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  min-height: 200px;
+}
+.tree-sel-count { font-size: 12px; color: var(--text-sec); }
+
+.tree-node { font-size: 12px; }
+.tree-node-row {
+  display: flex; align-items: center; gap: 5px;
+  padding: 2px 4px; border-radius: 4px; cursor: default;
+  user-select: none;
+}
+.tree-node-row:hover { background: rgba(59,130,246,.07); }
+
+.tree-toggle {
+  width: 18px; height: 18px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: none; border: none; cursor: pointer;
+  color: var(--text-mute); font-size: 9px; padding: 0;
+  transition: transform .15s; border-radius: 3px;
+}
+.tree-toggle:hover { color: var(--text); background: var(--elevated); }
+.tree-toggle.expanded { transform: rotate(90deg); }
+.tree-toggle-spacer { display: inline-block; width: 18px; flex-shrink: 0; }
+
+.tree-check { cursor: pointer; accent-color: var(--accent); flex-shrink: 0; margin: 0; }
+.tree-icon  { flex-shrink: 0; font-size: 11px; line-height: 1; }
+.tree-label {
+  flex: 1; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tree-node-row.is-leaf .tree-label { color: var(--text-sec); }
+
+.tree-children { padding-left: 22px; }
+.tree-children.hidden { display: none; }
+
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track  { background: transparent; }

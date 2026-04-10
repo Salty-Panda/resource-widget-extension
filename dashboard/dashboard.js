@@ -289,34 +289,300 @@ async function executeMerge() {
   } catch (e) { showToast(e.message, 'error'); }
 }
 
-// ─── Import Modal ─────────────────────────────────────────────────────────────
-async function runBookmarkPreview() {
-  const info = document.getElementById('import-preview-info');
-  info.classList.remove('hidden'); info.textContent = 'Scanning bookmarks…';
+// ─── Import Modal — tree-based selection ──────────────────────────────────────
+
+/**
+ * Internal state for the import tree.
+ * @type {{
+ *   displayTree:   object[],
+ *   nodeInfoMap:   Map<string, {node:object, cbEl:HTMLInputElement, toggleEl:HTMLElement|null, childrenEl:HTMLElement|null}>,
+ *   parentMap:     Map<string, string|null>,
+ *   checkedLeaves: Set<string>
+ * }}
+ */
+const importTree = {
+  displayTree:   [],
+  nodeInfoMap:   new Map(),
+  parentMap:     new Map(),
+  checkedLeaves: new Set(),
+};
+
+/** Open the import modal: reset state, fetch tree, render it. */
+async function openImportModal() {
+  // Reset
+  importTree.displayTree   = [];
+  importTree.nodeInfoMap   = new Map();
+  importTree.parentMap     = new Map();
+  importTree.checkedLeaves = new Set();
+
+  const loadingEl  = document.getElementById('import-loading');
+  const treeEl     = document.getElementById('import-tree-body');
+  const progressEl = document.getElementById('import-progress-body');
+
+  loadingEl.classList.remove('hidden');
+  treeEl.classList.add('hidden');
+  treeEl.innerHTML = '';
+  progressEl.classList.add('hidden');
+  document.getElementById('btn-import-confirm').disabled = true;
+  document.getElementById('btn-import-select-all').disabled   = true;
+  document.getElementById('btn-import-deselect-all').disabled = true;
+  document.getElementById('import-sel-count').textContent = '';
+  openModal('modal-import');
+
   try {
-    const items  = await im.preview();
-    const withId = items.filter(i => i.detectedId).length;
-    info.innerHTML = `Found <strong>${items.length}</strong> bookmarks — <strong>${withId}</strong> with auto-detected IDs.`;
-    document.getElementById('import-step-2').classList.remove('hidden');
-    document.getElementById('btn-import-confirm').classList.remove('hidden');
-    document.getElementById('import-summary').innerHTML = `<strong>${items.length}</strong> bookmarks ready.`;
-  } catch (e) { info.innerHTML = `<span class="text-danger">Error: ${esc(e.message)}</span>`; }
+    const rawTree = await im.getBookmarkTree();
+    importTree.displayTree = im.buildDisplayTree(rawTree);
+    _itIndexNodes(importTree.displayTree, null);
+    _itRenderLevel(importTree.displayTree, treeEl);
+    loadingEl.classList.add('hidden');
+    treeEl.classList.remove('hidden');
+    document.getElementById('btn-import-select-all').disabled   = false;
+    document.getElementById('btn-import-deselect-all').disabled = false;
+    _itUpdateSelCount();
+  } catch (e) {
+    loadingEl.textContent = `Error loading bookmarks: ${esc(e.message)}`;
+  }
 }
 
-async function runImport() {
-  const progressWrap = document.getElementById('import-progress');
-  const progressFill = document.getElementById('import-progress-fill');
-  const progressText = document.getElementById('import-progress-text');
-  const confirmBtn   = document.getElementById('btn-import-confirm');
-  progressWrap.classList.remove('hidden'); confirmBtn.disabled = true;
-  const result = await im.importAll({ onProgress(done, total) {
-    progressFill.style.width = Math.round(done/total*100) + '%';
-    progressText.textContent = `${done} / ${total}`;
-  }});
-  progressText.textContent = `Done! Added: ${result.imported}, Merged: ${result.merged}, Skipped: ${result.skipped}`;
-  showToast(`Import: ${result.imported} added, ${result.merged} merged`, 'success');
-  loadAll();
+// ── Index helpers ─────────────────────────────────────────────────────────────
+
+/** Eagerly build parentMap for every node in the tree (no DOM yet). */
+function _itIndexNodes(nodes, parentId) {
+  for (const node of nodes) {
+    importTree.parentMap.set(node.nodeId, parentId);
+    if (node.isFolder) _itIndexNodes(node.children, node.nodeId);
+  }
 }
+
+// ── DOM rendering (lazy) ──────────────────────────────────────────────────────
+
+/**
+ * Render one level of tree nodes into `container`.
+ * Children of folders are NOT rendered here; they are rendered on first expand.
+ */
+function _itRenderLevel(nodes, container) {
+  for (const node of nodes) {
+    const el  = document.createElement('div');
+    el.className    = 'tree-node';
+    el.dataset.nodeId = node.nodeId;
+
+    const row = document.createElement('div');
+    row.className = `tree-node-row${node.isFolder ? '' : ' is-leaf'}`;
+
+    // Expand / collapse toggle (folders only)
+    let toggleEl = null;
+    if (node.isFolder && node.children.length > 0) {
+      toggleEl = document.createElement('button');
+      toggleEl.className = 'tree-toggle';
+      toggleEl.title = 'Expand / Collapse';
+      toggleEl.innerHTML = '&#9658;'; // ▶
+      toggleEl.addEventListener('click', e => { e.stopPropagation(); _itToggleFolder(node.nodeId); });
+      row.appendChild(toggleEl);
+    } else {
+      const spc = document.createElement('span');
+      spc.className = 'tree-toggle-spacer';
+      row.appendChild(spc);
+    }
+
+    // Checkbox (tri-state via indeterminate)
+    const cb = document.createElement('input');
+    cb.type      = 'checkbox';
+    cb.className = 'tree-check';
+    cb.addEventListener('click', () => { _itHandleCheck(node.nodeId); });
+    row.appendChild(cb);
+
+    // Icon
+    const icon = document.createElement('span');
+    icon.className = 'tree-icon';
+    icon.textContent = node.isFolder ? '📁' : '🔖';
+    row.appendChild(icon);
+
+    // Label
+    const label = document.createElement('span');
+    label.className = 'tree-label';
+    label.textContent = node.title;
+    if (!node.isFolder && node.url) label.title = node.url;
+    row.appendChild(label);
+
+    el.appendChild(row);
+
+    // Children container — rendered lazily on first expand
+    let childrenEl = null;
+    if (node.isFolder && node.children.length > 0) {
+      childrenEl = document.createElement('div');
+      childrenEl.className    = 'tree-children hidden';
+      childrenEl.dataset.rendered = 'false';
+      el.appendChild(childrenEl);
+    }
+
+    container.appendChild(el);
+
+    // Register in map
+    importTree.nodeInfoMap.set(node.nodeId, { node, cbEl: cb, toggleEl, childrenEl });
+
+    // Sync checkbox from current state
+    _itSyncCheckbox(node.nodeId);
+  }
+}
+
+// ── Expand / Collapse ─────────────────────────────────────────────────────────
+
+function _itToggleFolder(nodeId) {
+  const info = importTree.nodeInfoMap.get(nodeId);
+  if (!info?.childrenEl) return;
+  const isHidden = info.childrenEl.classList.contains('hidden');
+  if (isHidden) {
+    if (info.childrenEl.dataset.rendered === 'false') {
+      _itRenderLevel(info.node.children, info.childrenEl);
+      info.childrenEl.dataset.rendered = 'true';
+    }
+    info.childrenEl.classList.remove('hidden');
+    if (info.toggleEl) info.toggleEl.classList.add('expanded');
+  } else {
+    info.childrenEl.classList.add('hidden');
+    if (info.toggleEl) info.toggleEl.classList.remove('expanded');
+  }
+}
+
+// ── Check state logic ─────────────────────────────────────────────────────────
+
+/** Get the logical check state of a node: 'checked' | 'unchecked' | 'partial'. */
+function _itCheckState(node) {
+  if (!node.isFolder) {
+    return importTree.checkedLeaves.has(node.nodeId) ? 'checked' : 'unchecked';
+  }
+  const leaves = _itGetLeaves(node);
+  if (!leaves.length) return 'unchecked';
+  const n = leaves.filter(l => importTree.checkedLeaves.has(l.nodeId)).length;
+  if (n === 0) return 'unchecked';
+  if (n === leaves.length) return 'checked';
+  return 'partial';
+}
+
+/** Recursively collect all leaf (bookmark) descendants of a node. */
+function _itGetLeaves(node) {
+  if (!node.isFolder) return [node];
+  const out = [];
+  for (const c of node.children) out.push(..._itGetLeaves(c));
+  return out;
+}
+
+/** Propagate a checked/unchecked state to all leaf descendants (or the leaf itself). */
+function _itPropagate(node, checked) {
+  if (!node.isFolder) {
+    if (checked) importTree.checkedLeaves.add(node.nodeId);
+    else         importTree.checkedLeaves.delete(node.nodeId);
+    return;
+  }
+  for (const c of node.children) _itPropagate(c, checked);
+}
+
+/** Sync the DOM checkbox for a single node to match current state. */
+function _itSyncCheckbox(nodeId) {
+  const info = importTree.nodeInfoMap.get(nodeId);
+  if (!info) return; // not rendered yet — handled on lazy render
+  const s = _itCheckState(info.node);
+  info.cbEl.indeterminate = s === 'partial';
+  info.cbEl.checked       = s === 'checked';
+}
+
+/**
+ * Sync DOM checkboxes for a node and all its RENDERED descendants.
+ * Unrendered children are handled when they are lazily rendered.
+ */
+function _itSyncSubtree(node) {
+  _itSyncCheckbox(node.nodeId);
+  if (!node.isFolder) return;
+  const info = importTree.nodeInfoMap.get(node.nodeId);
+  // Only recurse if children have been rendered into the DOM
+  if (info?.childrenEl?.dataset.rendered === 'true') {
+    for (const c of node.children) _itSyncSubtree(c);
+  }
+}
+
+/** Walk up the parentMap and sync each ancestor's checkbox. */
+function _itSyncAncestors(nodeId) {
+  let pid = importTree.parentMap.get(nodeId);
+  while (pid) {
+    _itSyncCheckbox(pid);
+    pid = importTree.parentMap.get(pid);
+  }
+}
+
+// ── Checkbox click handler ────────────────────────────────────────────────────
+
+function _itHandleCheck(nodeId) {
+  const info = importTree.nodeInfoMap.get(nodeId);
+  if (!info) return;
+  const node = info.node;
+  const newChecked = _itCheckState(node) !== 'checked'; // partial → checked, unchecked → checked, checked → unchecked
+  _itPropagate(node, newChecked);
+  _itSyncSubtree(node);
+  _itSyncAncestors(nodeId);
+  _itUpdateSelCount();
+}
+
+// ── Selection count ───────────────────────────────────────────────────────────
+
+function _itUpdateSelCount() {
+  const n = importTree.checkedLeaves.size;
+  document.getElementById('import-sel-count').textContent =
+    n > 0 ? `${n} bookmark${n !== 1 ? 's' : ''} selected` : 'None selected';
+  document.getElementById('btn-import-confirm').disabled = n === 0;
+}
+
+// ── Select / Deselect All ─────────────────────────────────────────────────────
+
+function _itSelectAll(checked) {
+  for (const node of importTree.displayTree) _itPropagate(node, checked);
+  // Sync all rendered checkboxes
+  for (const [nodeId] of importTree.nodeInfoMap) _itSyncCheckbox(nodeId);
+  _itUpdateSelCount();
+}
+
+// ── Confirm import ────────────────────────────────────────────────────────────
+
+async function runSelectedImport() {
+  // Collect selected items
+  const items = [];
+  for (const leafId of importTree.checkedLeaves) {
+    const info = importTree.nodeInfoMap.get(leafId);
+    if (!info || info.node.isFolder) continue;
+    const { url, title, parentTags: tags, dateAdded } = info.node;
+    items.push({ url, title, tags, dateAdded });
+  }
+  if (!items.length) return;
+
+  // Switch UI to progress view
+  document.getElementById('import-tree-body').classList.add('hidden');
+  const progressEl = document.getElementById('import-progress-body');
+  progressEl.classList.remove('hidden');
+  document.getElementById('btn-import-confirm').disabled     = true;
+  document.getElementById('btn-import-select-all').disabled  = true;
+  document.getElementById('btn-import-deselect-all').disabled = true;
+
+  const fill = document.getElementById('import-progress-fill');
+  const text = document.getElementById('import-progress-text');
+  fill.style.width = '0%';
+  text.textContent = `0 / ${items.length}`;
+
+  try {
+    const result = await im.importSelected(items, {
+      onProgress(done, total) {
+        fill.style.width    = Math.round(done / total * 100) + '%';
+        text.textContent    = `${done} / ${total}`;
+      },
+    });
+    text.textContent =
+      `Done! Added: ${result.imported}, Merged: ${result.merged}, Skipped: ${result.skipped}`;
+    showToast(`Import: ${result.imported} added, ${result.merged} merged`, 'success');
+    loadAll();
+  } catch (e) {
+    text.textContent = `Error: ${esc(e.message)}`;
+    showToast(e.message, 'error');
+  }
+}
+
 
 // ─── Tag Group Management Modal ───────────────────────────────────────────────
 function openTagsModal() {
@@ -852,12 +1118,7 @@ function bindStaticEvents() {
     ['add-id','add-url','add-tags'].forEach(id => document.getElementById(id).value = '');
     renderStarInput('add-rating', 0); openModal('modal-add');
   });
-  document.getElementById('btn-import').addEventListener('click', () => {
-    document.getElementById('import-step-2').classList.add('hidden');
-    document.getElementById('btn-import-confirm').classList.add('hidden');
-    document.getElementById('import-preview-info').classList.add('hidden');
-    openModal('modal-import');
-  });
+  document.getElementById('btn-import').addEventListener('click', openImportModal);
   document.getElementById('btn-tags').addEventListener('click', openTagsModal);
   document.getElementById('btn-migration').addEventListener('click', openMigrationWizard);
   document.getElementById('btn-backup').addEventListener('click', () => openModal('modal-backup'));
@@ -941,9 +1202,10 @@ function bindStaticEvents() {
   document.getElementById('merge-btn-preview').addEventListener('click', previewMerge);
   document.getElementById('merge-btn-confirm').addEventListener('click', executeMerge);
 
-  // Import modal
-  document.getElementById('btn-import-preview').addEventListener('click', runBookmarkPreview);
-  document.getElementById('btn-import-confirm').addEventListener('click', runImport);
+  // Import modal — tree-based
+  document.getElementById('btn-import-confirm').addEventListener('click', runSelectedImport);
+  document.getElementById('btn-import-select-all').addEventListener('click',   () => _itSelectAll(true));
+  document.getElementById('btn-import-deselect-all').addEventListener('click', () => _itSelectAll(false));
 
   // Add resource modal
   document.getElementById('add-btn-confirm').addEventListener('click', handleAddResource);
