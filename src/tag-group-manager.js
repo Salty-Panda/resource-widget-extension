@@ -199,21 +199,32 @@ export class TagGroupManager {
   // ─── Migration ───────────────────────────────────────────────────────────────
 
   /**
-   * One-time migration: convert legacy flat tag strings in resources to Tag Group IDs.
-   * Detects resources whose tags don't start with "tg_".
+   * Migrate / repair resource tags:
+   *   1. Convert legacy flat-string tags (not starting with "tg_") to Tag Group IDs.
+   *   2. Remove orphaned tg_… IDs — IDs that exist in a resource's tags array but
+   *      have no corresponding entry in this.tagGroups (can happen when concurrent
+   *      migrations in the dashboard and service worker race each other and their
+   *      tgm.save() calls overwrite each other's newly-created groups).
+   *
    * Mutates resources in-place. Does NOT save — caller saves both managers.
    * @param {object} resources  rm.resources (keyed object)
-   * @returns {boolean}  true if any migration was performed
+   * @returns {boolean}  true if any resource was changed
    */
   migrateResources(resources) {
     let migrated = false;
     for (const res of Object.values(resources)) {
-      if (!res.tags.some(t => !t.startsWith('tg_'))) continue;
-      res.tags = res.tags.map(t =>
+      const hasFlatStrings  = res.tags.some(t => !t.startsWith('tg_'));
+      const hasOrphanedIds  = res.tags.some(t => t.startsWith('tg_') && !this.tagGroups[t]);
+      if (!hasFlatStrings && !hasOrphanedIds) continue;
+
+      // 1. Convert flat strings → tag group IDs (getOrCreate is idempotent via alias check)
+      // 2. Drop any tg_… ID that has no matching tag group
+      const converted = res.tags.map(t =>
         t.startsWith('tg_') ? t : this.getOrCreate(t).id
       );
+      res.tags      = [...new Set(converted.filter(t => this.tagGroups[t]))];
       res.updatedAt = Date.now();
-      migrated = true;
+      migrated      = true;
     }
     return migrated;
   }

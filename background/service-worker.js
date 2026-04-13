@@ -22,11 +22,13 @@ let   initPromise = _init();
 async function _init() {
   await rm.initialize();
   await tgm.initialize();
-  // One-time migration: flat string tags → Tag Group IDs
-  if (tgm.migrateResources(rm.resources)) {
-    await tgm.save();
-    await rm.save();
-  }
+  // NOTE: migrateResources() is intentionally NOT called here.
+  // Running it in the service worker concurrently with the dashboard creates a
+  // race condition: both processes load the same flat-string resources, each
+  // generate *different* tg_… IDs for the same labels, then their rm.save() /
+  // tgm.save() calls interleave — leaving resources that reference IDs which
+  // the other process's tgm.save() wiped from storage (orphaned tg_… tags).
+  // Migration is the dashboard's responsibility only.
 }
 
 // ─── Tab events ───────────────────────────────────────────────────────────────

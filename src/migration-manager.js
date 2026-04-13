@@ -1,17 +1,17 @@
 import { normalizeUrl, isValidUrl } from './url-utils.js';
 
 /**
- * Migration rule shape:
- * {
- *   id:             string,   // unique rule identifier
- *   name:           string,   // human-readable label
- *   sourcePattern:  string,   // URL pattern with {ID} placeholder
- *   targetTemplate: string,   // URL template with {ID} placeholder
- * }
+ * ID-based URL generation for migration.
  *
- * Example:
- *   sourcePattern:  "https://oldjira.example.com/browse/{ID}"
- *   targetTemplate: "https://newjira.example.com/browse/{ID}"
+ * The system generates new URLs by substituting the Resource ID into one or
+ * more user-defined URL templates.  No dependency on existing resource URLs.
+ *
+ * Eligible resources: those whose id matches the pattern ID format
+ * (isPatternId === true, i.e. \w{2,5}-\d{3,5}).
+ *
+ * For each eligible resource × each template:
+ *   generatedUrl = template.replace('{ID}', resource.id)
+ *   → added to resource.urls (non-destructive, deduplicated)
  */
 export class MigrationManager {
   /**
@@ -21,55 +21,50 @@ export class MigrationManager {
     this.rm = rm;
   }
 
-  // ─── Rule helpers ────────────────────────────────────────────────────────────
+  // ─── URL building ────────────────────────────────────────────────────────────
 
   /**
-   * Build a RegExp from a sourcePattern by replacing {ID} with the ID regex.
-   * Returns null if pattern is invalid.
+   * Substitute {ID} in a template and ensure a valid protocol.
+   * If the template has no http(s):// prefix, https:// is prepended.
+   * @param {string} template
+   * @param {string} resourceId   normalised resource ID (e.g. "ABC-123")
+   * @returns {string}
    */
-  buildSourceRegex(sourcePattern) {
-    try {
-      const escaped = sourcePattern
-        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&') // escape regex meta-chars
-        .replace(/\\\{ID\\\}/g, '(\\w{2,5}-\\d{3,5})'); // un-escape placeholder
-      return new RegExp(`^${escaped}$`, 'i');
-    } catch {
-      return null;
-    }
+  buildUrl(template, resourceId) {
+    let url = template.replace(/\{ID}/gi, resourceId).trim();
+    if (url && !/^https?:\/\//i.test(url)) url = 'https://' + url;
+    return url;
   }
 
+  // ─── Stats ───────────────────────────────────────────────────────────────────
+
   /**
-   * Generate a target URL for a given resource ID.
+   * Count resources eligible for migration (isPatternId === true).
+   * @returns {number}
    */
-  buildTargetUrl(targetTemplate, resourceId) {
-    return targetTemplate.replace(/\{ID\}/gi, resourceId);
+  countEligible() {
+    return this.rm.getAllResources().filter(r => r.isPatternId).length;
   }
 
   // ─── Preview ─────────────────────────────────────────────────────────────────
 
   /**
-   * Find all resources that have at least one URL matching the sourcePattern
-   * and whose ID is a pattern ID.
+   * Build the full set of (resource, template, generatedUrl) triples for all
+   * eligible resources × all templates.
    *
-   * @param {string} sourcePattern
-   * @param {string} targetTemplate
-   * @returns {{ resource, matchedUrl, generatedUrl, alreadyPresent }[]}
+   * @param {string[]} templates
+   * @returns {{ resource, template:string, generatedUrl:string, alreadyPresent:boolean }[]}
    */
-  preview(sourcePattern, targetTemplate) {
-    const regex = this.buildSourceRegex(sourcePattern);
-    if (!regex) return [];
-
+  preview(templates) {
     const results = [];
     for (const resource of this.rm.getAllResources()) {
       if (!resource.isPatternId) continue;
-      const matchedUrl = resource.urls.find(u => regex.test(u));
-      if (!matchedUrl) continue;
-
-      const generatedUrl    = this.buildTargetUrl(targetTemplate, resource.id);
-      const normalizedGen   = normalizeUrl(generatedUrl);
-      const alreadyPresent  = resource.urls.map(normalizeUrl).includes(normalizedGen);
-
-      results.push({ resource, matchedUrl, generatedUrl, alreadyPresent });
+      for (const tpl of templates) {
+        const generatedUrl   = this.buildUrl(tpl, resource.id);
+        const normalized     = normalizeUrl(generatedUrl);
+        const alreadyPresent = resource.urls.map(normalizeUrl).includes(normalized);
+        results.push({ resource, template: tpl, generatedUrl, alreadyPresent });
+      }
     }
     return results;
   }
@@ -77,14 +72,14 @@ export class MigrationManager {
   // ─── Validation ──────────────────────────────────────────────────────────────
 
   /**
-   * Validate a random sample of generated URLs by sending HEAD requests.
+   * HEAD-test a random sample of URLs to gauge availability before committing.
    * @param {string[]} urls
-   * @param {number}   sampleSize   max URLs to test
-   * @param {(done:number, total:number) => void} onProgress
-   * @returns {Promise<{ url, ok, status }[]>}
+   * @param {number}   sampleSize   max URLs to test (default 10)
+   * @param {(done:number, total:number) => void} [onProgress]
+   * @returns {Promise<{ url:string, ok:boolean, status:number }[]>}
    */
   async validateSample(urls, sampleSize = 10, onProgress) {
-    const sample = this._randomSample(urls, sampleSize);
+    const sample  = this._randomSample(urls, sampleSize);
     const results = [];
     for (let i = 0; i < sample.length; i++) {
       const url = sample[i];
@@ -112,24 +107,25 @@ export class MigrationManager {
   // ─── Execution ───────────────────────────────────────────────────────────────
 
   /**
-   * Apply the migration: add generated URLs to matched resources (non-destructive).
-   * Preserves existing URLs.
+   * Add generated URLs to all eligible resources (non-destructive).
+   * Existing URLs are never removed or modified.
+   * Duplicates and invalid URLs are silently skipped.
    *
-   * @param {string} sourcePattern
-   * @param {string} targetTemplate
-   * @param {(done:number, total:number) => void} onProgress
+   * @param {string[]} templates
+   * @param {(done:number, total:number) => void} [onProgress]
    * @returns {Promise<{ applied:number, skipped:number }>}
    */
-  async execute(sourcePattern, targetTemplate, onProgress) {
-    const previews = this.preview(sourcePattern, targetTemplate);
+  async execute(templates, onProgress) {
+    const previews = this.preview(templates);
     let applied = 0, skipped = 0;
 
     for (let i = 0; i < previews.length; i++) {
       const { resource, generatedUrl, alreadyPresent } = previews[i];
-      if (alreadyPresent) { skipped++; }
-      else {
+      if (alreadyPresent) {
+        skipped++;
+      } else {
         const nUrl = normalizeUrl(generatedUrl);
-        if (!resource.urls.includes(nUrl) && isValidUrl(generatedUrl)) {
+        if (isValidUrl(generatedUrl) && !resource.urls.includes(nUrl)) {
           resource.urls.push(nUrl);
           this.rm.urlIndex[nUrl] = resource.id;
           resource.updatedAt = Date.now();

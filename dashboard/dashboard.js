@@ -543,14 +543,19 @@ function _itSelectAll(checked) {
 // ── Confirm import ────────────────────────────────────────────────────────────
 
 async function runSelectedImport() {
-  // Collect selected items
+  // Collect selected items by walking the full logical tree, NOT nodeInfoMap.
+  // nodeInfoMap only contains DOM-rendered (expanded) nodes; using it would
+  // silently skip selected bookmarks inside folders that were never expanded.
   const items = [];
-  for (const leafId of importTree.checkedLeaves) {
-    const info = importTree.nodeInfoMap.get(leafId);
-    if (!info || info.node.isFolder) continue;
-    const { url, title, parentTags: tags, dateAdded } = info.node;
-    items.push({ url, title, tags, dateAdded });
-  }
+  (function collectLeaves(nodes) {
+    for (const node of nodes) {
+      if (node.isFolder) {
+        collectLeaves(node.children);
+      } else if (importTree.checkedLeaves.has(node.nodeId)) {
+        items.push({ url: node.url, title: node.title, tags: node.parentTags, dateAdded: node.dateAdded });
+      }
+    }
+  })(importTree.displayTree);
   if (!items.length) return;
 
   // Switch UI to progress view
@@ -573,6 +578,17 @@ async function runSelectedImport() {
         text.textContent    = `${done} / ${total}`;
       },
     });
+
+    // Post-import cleanup: some pre-existing resources may have been merged
+    // and now contain a mix of flat-string tags and tg_… IDs.
+    // migrateResources converts the flat strings to proper Tag Groups so they
+    // are immediately visible (and deletable) in the Tags manager.
+    // It also removes any orphaned tg_… IDs that have no matching Tag Group.
+    if (tgm.migrateResources(rm.resources)) {
+      await tgm.save();
+      await rm.save();
+    }
+
     text.textContent =
       `Done! Added: ${result.imported}, Merged: ${result.merged}, Skipped: ${result.skipped}`;
     showToast(`Import: ${result.imported} added, ${result.merged} merged`, 'success');
@@ -585,22 +601,69 @@ async function runSelectedImport() {
 
 
 // ─── Tag Group Management Modal ───────────────────────────────────────────────
+
+/** Build a map of { [tagGroupId]: resourceCount } from the current resource set. */
+function buildTagUsageMap() {
+  const map = {};
+  for (const res of rm.getAllResources()) {
+    for (const tagId of res.tags) {
+      map[tagId] = (map[tagId] || 0) + 1;
+    }
+  }
+  return map;
+}
+
 function openTagsModal() {
-  renderTagGroupList('');
+  document.getElementById('tg-search').value = '';
+  document.getElementById('tg-filter-unused').checked = false;
+  renderTagGroupList('', false);
   openModal('modal-tags');
 }
 
-function renderTagGroupList(filter) {
-  const list = document.getElementById('tg-list');
-  const groups = tgm.getAll().filter(tg =>
+/** Re-render the tag list using whatever filter/toggle is currently active. */
+function _tgRerender() {
+  renderTagGroupList(
+    document.getElementById('tg-search').value,
+    document.getElementById('tg-filter-unused').checked
+  );
+}
+
+/** Delete all tag groups that are not referenced by any resource. */
+async function deleteUnusedTagGroups() {
+  const usageMap = buildTagUsageMap();
+  const unused   = tgm.getAll().filter(tg => !usageMap[tg.id]);
+  if (!unused.length) { showToast('No unused tag groups', 'warn'); return; }
+  if (!confirm(`Delete ${unused.length} unused tag group(s)?\nThis cannot be undone.`)) return;
+  // Batch-delete: none of these IDs are in any resource so no resource update needed
+  for (const tg of unused) delete tgm.tagGroups[tg.id];
+  await tgm.save();
+  showToast(`Deleted ${unused.length} unused tag group(s)`, 'success');
+  _tgRerender();
+  loadAll();
+}
+
+function renderTagGroupList(filter, unusedOnly = false) {
+  const list     = document.getElementById('tg-list');
+  const usageMap = buildTagUsageMap();
+  let groups = tgm.getAll().filter(tg =>
     !filter || tg.primaryLabel.toLowerCase().includes(filter.toLowerCase()) ||
     tg.aliases.some(a => a.toLowerCase().includes(filter.toLowerCase()))
   );
-  if (!groups.length) { list.innerHTML = '<div style="padding:20px;color:var(--text-mute);text-align:center">No tag groups found.</div>'; return; }
-  list.innerHTML = groups.map(tg => `
-    <div class="tg-row" data-tgid="${esc(tg.id)}">
+  if (unusedOnly) groups = groups.filter(tg => !usageMap[tg.id]);
+  if (!groups.length) {
+    list.innerHTML = '<div style="padding:20px;color:var(--text-mute);text-align:center">No tag groups found.</div>';
+    return;
+  }
+  list.innerHTML = groups.map(tg => {
+    const count       = usageMap[tg.id] || 0;
+    const unusedClass = count === 0 ? ' tg-row--unused' : '';
+    const badgeClass  = count === 0 ? 'tg-usage-badge--unused' : '';
+    const badgeLabel  = count === 0 ? 'unused' : `${count} resource${count !== 1 ? 's' : ''}`;
+    return `
+    <div class="tg-row${unusedClass}" data-tgid="${esc(tg.id)}">
       <div class="tg-row-header">
         <span class="tg-primary-label">${esc(tg.primaryLabel)}</span>
+        <span class="tg-usage-badge ${badgeClass}">${badgeLabel}</span>
         <div class="tg-actions">
           <button class="btn btn-secondary btn-sm tg-btn-edit">Edit</button>
           <button class="btn btn-danger btn-sm tg-btn-delete">Delete</button>
@@ -631,7 +694,8 @@ function renderTagGroupList(filter) {
           <button class="btn btn-secondary btn-sm tg-btn-merge">Merge</button>
         </div>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   // Wire events
   list.querySelectorAll('.tg-btn-edit').forEach(btn => {
@@ -644,7 +708,7 @@ function renderTagGroupList(filter) {
   list.querySelectorAll('.tg-alias-remove').forEach(btn => {
     btn.addEventListener('click', async () => {
       const tgId  = btn.closest('.tg-row').dataset.tgid;
-      try { await tgm.removeAlias(tgId, btn.dataset.alias); renderTagGroupList(document.getElementById('tg-search').value); loadAll(); }
+      try { await tgm.removeAlias(tgId, btn.dataset.alias); _tgRerender(); loadAll(); }
       catch (e) { showToast(e.message, 'error'); }
     });
   });
@@ -654,7 +718,7 @@ function renderTagGroupList(filter) {
       const row   = btn.closest('.tg-row');
       const tgId  = row.dataset.tgid;
       const label = row.querySelector('.tg-rename-input').value.trim();
-      try { await tgm.renamePrimaryLabel(tgId, label); renderTagGroupList(document.getElementById('tg-search').value); loadAll(); }
+      try { await tgm.renamePrimaryLabel(tgId, label); _tgRerender(); loadAll(); }
       catch (e) { showToast(e.message, 'error'); }
     });
   });
@@ -664,15 +728,15 @@ function renderTagGroupList(filter) {
       const row   = btn.closest('.tg-row');
       const tgId  = row.dataset.tgid;
       const alias = row.querySelector('.tg-alias-input').value.trim();
-      try { await tgm.addAlias(tgId, alias); renderTagGroupList(document.getElementById('tg-search').value); loadAll(); }
+      try { await tgm.addAlias(tgId, alias); _tgRerender(); loadAll(); }
       catch (e) { showToast(e.message, 'error'); }
     });
   });
 
   list.querySelectorAll('.tg-btn-merge').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const row      = btn.closest('.tg-row');
-      const sourceId = row.dataset.tgid;
+      const row       = btn.closest('.tg-row');
+      const sourceId  = row.dataset.tgid;
       const rawTarget = row.querySelector('.tg-merge-input').value.trim();
       const targetTg  = tgm.findByAlias(rawTarget) || tgm.getById(rawTarget);
       if (!targetTg) { showToast('Target tag group not found', 'error'); return; }
@@ -681,8 +745,7 @@ function renderTagGroupList(filter) {
         await tgm.merge(sourceId, targetTg.id, rm.resources);
         await rm.save();
         showToast('Tag groups merged ✓', 'success');
-        renderTagGroupList(document.getElementById('tg-search').value);
-        loadAll();
+        _tgRerender(); loadAll();
       } catch (e) { showToast(e.message, 'error'); }
     });
   });
@@ -692,16 +755,38 @@ function renderTagGroupList(filter) {
       const tgId  = btn.closest('.tg-row').dataset.tgid;
       const label = tgm.getById(tgId)?.primaryLabel || tgId;
       if (!confirm(`Delete tag group "${label}"?\nIt will be removed from all resources.`)) return;
-      try { await tgm.delete(tgId, rm.resources); await rm.save(); showToast('Deleted', 'warn'); renderTagGroupList(document.getElementById('tg-search').value); loadAll(); }
+      try { await tgm.delete(tgId, rm.resources); await rm.save(); showToast('Deleted', 'warn'); _tgRerender(); loadAll(); }
       catch (e) { showToast(e.message, 'error'); }
     });
   });
 }
 
 // ─── Migration Wizard ─────────────────────────────────────────────────────────
-const MW = { step: 0, sourcePattern: '', targetTemplate: '', previewItems: [], sampleResults: [], successRate: 0 };
 
-function openMigrationWizard() { MW.step = 1; renderMigrationStep(); openModal('modal-migration'); }
+/**
+ * Wizard state.
+ * templates    — URL templates entered by the user (preserved across re-opens)
+ * previewItems — { resource, template, generatedUrl, alreadyPresent }[]
+ * sampleResults— { url, ok, status }[]
+ * successRate  — number (0-100) | null (validation skipped)
+ */
+const MW = {
+  step:         0,
+  templates:    [],   // persisted across opens so user doesn't re-enter every time
+  previewItems: [],
+  sampleResults:[],
+  successRate:  null,
+};
+
+function openMigrationWizard() {
+  MW.step          = 1;
+  MW.previewItems  = [];
+  MW.sampleResults = [];
+  MW.successRate   = null;
+  // MW.templates intentionally kept — user may re-run with the same set
+  renderMigrationStep();
+  openModal('modal-migration');
+}
 
 function renderMigrationStep() {
   updateStepsIndicator(MW.step, 4);
@@ -715,61 +800,136 @@ function renderMigrationStep() {
   }
 }
 
+// ── Step 1 — Template input ───────────────────────────────────────────────────
+
 function renderMigrationStep1(body, footer) {
+  const eligible = migm.countEligible();
   body.innerHTML = `<div class="migration-step">
-    <label>Source URL Pattern — use <code>{ID}</code> as placeholder</label>
-    <input id="mig-source" class="form-input" placeholder="https://old.example.com/browse/{ID}" value="${esc(MW.sourcePattern)}" />
-    <label>Target URL Template — use <code>{ID}</code> as placeholder</label>
-    <input id="mig-target" class="form-input" placeholder="https://new.example.com/browse/{ID}" value="${esc(MW.targetTemplate)}" />
-    <div id="mig-pattern-count" class="muted small"></div>
+    <p class="muted small">
+      Define one or more URL templates. Use <code>{ID}</code> as the Resource ID
+      placeholder. The protocol is optional — <code>https://</code> is added if absent.
+    </p>
+    <div class="url-add-row">
+      <input id="mig-tpl-input" class="form-input"
+             placeholder="e.g. https://example.com/browse/{ID}" />
+      <button id="mig-tpl-add" class="btn btn-secondary btn-sm">Add</button>
+    </div>
+    <div id="mig-tpl-list" class="mig-tpl-list"></div>
+    <p class="muted small">
+      <strong>${eligible}</strong> eligible resource${eligible !== 1 ? 's' : ''}
+      (pattern-ID only; resources without an ID are skipped).
+    </p>
   </div>`;
   footer.innerHTML = `
-    <button id="mig-btn-preview" class="btn btn-secondary">Preview Matches</button>
-    <button id="mig-btn-next"    class="btn btn-primary" disabled>Next →</button>
+    <button id="mig-btn-next" class="btn btn-primary">Preview →</button>
     <button class="btn btn-secondary modal-close" data-modal="modal-migration">Cancel</button>`;
-  document.getElementById('mig-btn-preview').addEventListener('click', () => {
-    MW.sourcePattern  = document.getElementById('mig-source').value.trim();
-    MW.targetTemplate = document.getElementById('mig-target').value.trim();
-    if (!MW.sourcePattern || !MW.targetTemplate) { showToast('Fill in both fields', 'error'); return; }
-    MW.previewItems = migm.preview(MW.sourcePattern, MW.targetTemplate);
-    document.getElementById('mig-pattern-count').textContent = `${MW.previewItems.length} resource(s) affected.`;
-    document.getElementById('mig-btn-next').disabled = !MW.previewItems.length;
+
+  _mwRenderTemplateList();
+
+  const input = document.getElementById('mig-tpl-input');
+  function addTpl() {
+    const val = input.value.trim();
+    if (!val) return;
+    if (!MW.templates.includes(val)) {
+      MW.templates.push(val);
+      _mwRenderTemplateList();
+    }
+    input.value = '';
+    input.focus();
+  }
+  document.getElementById('mig-tpl-add').addEventListener('click', addTpl);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addTpl(); } });
+
+  document.getElementById('mig-btn-next').addEventListener('click', () => {
+    if (!MW.templates.length) { showToast('Add at least one template', 'error'); return; }
+    MW.previewItems = migm.preview(MW.templates);
+    MW.step = 2;
+    renderMigrationStep();
   });
-  document.getElementById('mig-btn-next').addEventListener('click', () => { MW.step = 2; renderMigrationStep(); });
 }
 
+/** Render only the template list element inside step 1 (no full re-render). */
+function _mwRenderTemplateList() {
+  const container = document.getElementById('mig-tpl-list');
+  if (!container) return;
+  if (!MW.templates.length) {
+    container.innerHTML = '<p class="muted small" style="margin:2px 0">No templates added yet.</p>';
+    return;
+  }
+  container.innerHTML = MW.templates.map((tpl, i) => `
+    <div class="mig-tpl-row">
+      <span class="mig-tpl-value">${esc(tpl)}</span>
+      <button class="btn btn-danger btn-sm mig-tpl-remove" data-i="${i}" title="Remove">✕</button>
+    </div>`).join('');
+  container.querySelectorAll('.mig-tpl-remove').forEach(btn =>
+    btn.addEventListener('click', () => {
+      MW.templates.splice(+btn.dataset.i, 1);
+      _mwRenderTemplateList();
+    })
+  );
+}
+
+// ── Step 2 — Preview ──────────────────────────────────────────────────────────
+
 function renderMigrationStep2(body, footer) {
-  const rows = MW.previewItems.slice(0, 20).map(p =>
-    `<tr><td>${esc(p.resource.id)}</td>
-     <td class="muted small" style="word-break:break-all">${esc(p.matchedUrl)}</td>
-     <td style="word-break:break-all;color:var(--success)">${esc(p.generatedUrl)}</td>
-     <td>${p.alreadyPresent ? '<span style="color:var(--warn)">Exists</span>' : '<span style="color:var(--success)">New</span>'}</td></tr>`
+  const items      = MW.previewItems;
+  const newCount   = items.filter(p => !p.alreadyPresent).length;
+  const existCount = items.filter(p =>  p.alreadyPresent).length;
+  const resCount   = new Set(items.map(p => p.resource.id)).size;
+
+  const rows = items.slice(0, 25).map(p =>
+    `<tr>
+      <td style="padding:3px 6px">${esc(p.resource.id)}</td>
+      <td style="padding:3px 6px;color:var(--text-mute);font-size:10px;word-break:break-all">${esc(p.template)}</td>
+      <td style="padding:3px 6px;color:var(--success);word-break:break-all">${esc(p.generatedUrl)}</td>
+      <td style="padding:3px 6px">${p.alreadyPresent
+        ? '<span style="color:var(--warn)">Exists</span>'
+        : '<span style="color:var(--success)">New</span>'}</td>
+     </tr>`
   ).join('');
+
   body.innerHTML = `<div class="migration-step">
-    <p class="muted small"><strong>${MW.previewItems.length}</strong> resource(s) matched (first 20 shown):</p>
-    <div style="overflow-x:auto"><table style="width:100%;font-size:11px;border-collapse:collapse">
-      <thead><tr><th style="text-align:left;padding:4px 6px;color:var(--text-mute)">ID</th>
-      <th style="text-align:left;padding:4px 6px;color:var(--text-mute)">Old URL</th>
-      <th style="text-align:left;padding:4px 6px;color:var(--text-mute)">New URL</th>
-      <th style="text-align:left;padding:4px 6px;color:var(--text-mute)">Status</th></tr></thead>
-      <tbody>${rows}</tbody></table>
-    ${MW.previewItems.length > 20 ? `<p class="muted small">…and ${MW.previewItems.length - 20} more.</p>` : ''}</div>
+    <p class="muted small">
+      <strong>${resCount}</strong> resource${resCount !== 1 ? 's' : ''}
+      × <strong>${MW.templates.length}</strong> template${MW.templates.length !== 1 ? 's' : ''}
+      → <strong style="color:var(--success)">${newCount}</strong> new URL${newCount !== 1 ? 's' : ''},
+      <strong style="color:var(--warn)">${existCount}</strong> already present.
+    </p>
+    <div style="overflow-x:auto;max-height:320px;overflow-y:auto">
+      <table style="width:100%;font-size:11px;border-collapse:collapse">
+        <thead><tr>
+          <th style="text-align:left;padding:4px 6px;color:var(--text-mute)">ID</th>
+          <th style="text-align:left;padding:4px 6px;color:var(--text-mute)">Template</th>
+          <th style="text-align:left;padding:4px 6px;color:var(--text-mute)">Generated URL</th>
+          <th style="text-align:left;padding:4px 6px;color:var(--text-mute)">Status</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      ${items.length > 25 ? `<p class="muted small" style="padding:6px">…and ${items.length - 25} more.</p>` : ''}
+    </div>
+    ${newCount === 0
+      ? '<div class="info-box info-box--warn mt-8">All generated URLs already exist — nothing to add.</div>'
+      : ''}
   </div>`;
+
   footer.innerHTML = `
-    <button id="mig-btn-validate"  class="btn btn-secondary">Validate Sample</button>
-    <button id="mig-btn-skip-val"  class="btn btn-primary">Skip Validation →</button>
-    <button id="mig-btn-back2"     class="btn btn-secondary">← Back</button>`;
+    <button id="mig-btn-validate" class="btn btn-secondary" ${newCount === 0 ? 'disabled' : ''}>Validate Sample</button>
+    <button id="mig-btn-skip-val" class="btn btn-primary"   ${newCount === 0 ? 'disabled' : ''}>Skip Validation →</button>
+    <button id="mig-btn-back2"    class="btn btn-secondary">← Back</button>`;
   document.getElementById('mig-btn-back2').addEventListener('click', () => { MW.step = 1; renderMigrationStep(); });
   document.getElementById('mig-btn-skip-val').addEventListener('click', () => { MW.successRate = null; MW.step = 4; renderMigrationStep(); });
   document.getElementById('mig-btn-validate').addEventListener('click', () => { MW.step = 3; renderMigrationStep(); });
 }
 
+// ── Step 3 — Validation ───────────────────────────────────────────────────────
+
 function renderMigrationStep3(body, footer) {
   const newUrls = MW.previewItems.filter(p => !p.alreadyPresent).map(p => p.generatedUrl);
+  const sampleN = Math.min(10, newUrls.length);
   body.innerHTML = `<div class="migration-step">
-    <p class="muted small">Testing ${Math.min(10, newUrls.length)} of ${newUrls.length} URLs…</p>
+    <p class="muted small">Testing ${sampleN} of ${newUrls.length} new URL${newUrls.length !== 1 ? 's' : ''} via HEAD request…</p>
     <div class="progress-wrap"><div class="progress-bar"><div id="mig-prog-fill" class="progress-fill"></div></div>
-    <span id="mig-prog-text" class="muted small">0 / ${Math.min(10, newUrls.length)}</span></div>
+    <span id="mig-prog-text" class="muted small">0 / ${sampleN}</span></div>
     <div id="mig-val-results" class="muted small mt-8"></div>
   </div>`;
   footer.innerHTML = `<button id="mig-btn-back3" class="btn btn-secondary">← Back</button>`;
@@ -780,21 +940,26 @@ function renderMigrationStep3(body, footer) {
       document.getElementById('mig-prog-text').textContent = `${done} / ${total}`;
     });
     const ok = MW.sampleResults.filter(r => r.ok).length;
-    MW.successRate = MW.sampleResults.length > 0 ? Math.round(ok / MW.sampleResults.length * 100) : 100;
+    MW.successRate = MW.sampleResults.length > 0
+      ? Math.round(ok / MW.sampleResults.length * 100) : 100;
     document.getElementById('mig-val-results').innerHTML =
-      `Success rate: <strong style="color:${MW.successRate>=80?'var(--success)':'var(--danger)'}">${MW.successRate}%</strong> (${ok}/${MW.sampleResults.length})`;
+      `Success rate: <strong style="color:${MW.successRate >= 80 ? 'var(--success)' : 'var(--danger)'}">${MW.successRate}%</strong> (${ok}/${MW.sampleResults.length})`;
     document.getElementById('migration-footer').innerHTML +=
       `<button id="mig-btn-to4" class="btn btn-primary">Review Results →</button>`;
     document.getElementById('mig-btn-to4').addEventListener('click', () => { MW.step = 4; renderMigrationStep(); });
   })();
 }
 
+// ── Step 4 — Confirm / Apply ──────────────────────────────────────────────────
+
 function renderMigrationStep4(body, footer) {
   const newCount = MW.previewItems.filter(p => !p.alreadyPresent).length;
   const rate     = MW.successRate;
   body.innerHTML = `<div class="migration-step">
-    <p><strong>${newCount}</strong> new URLs will be added (non-destructive).</p>
-    <p class="muted small mt-8">${rate !== null ? `Validation: <strong style="color:${rate>=80?'var(--success)':'var(--danger)'}">${rate}%</strong> success rate.` : 'Validation skipped.'}</p>
+    <p><strong>${newCount}</strong> new URL${newCount !== 1 ? 's' : ''} will be added (non-destructive; existing URLs are preserved).</p>
+    <p class="muted small mt-8">${rate !== null
+      ? `Validation: <strong style="color:${rate >= 80 ? 'var(--success)' : 'var(--danger)'}">${rate}%</strong> success rate.`
+      : 'Validation skipped.'}</p>
     ${rate !== null && rate < 80 ? '<div class="info-box info-box--warn mt-8">⚠️ Low success rate — consider aborting.</div>' : ''}
   </div>`;
   footer.innerHTML = `
@@ -802,11 +967,13 @@ function renderMigrationStep4(body, footer) {
     <button id="mig-btn-abort" class="btn btn-secondary">Abort</button>`;
   document.getElementById('mig-btn-abort').addEventListener('click', () => { closeModal('modal-migration'); showToast('Aborted', 'warn'); });
   document.getElementById('mig-btn-apply').addEventListener('click', async () => {
-    document.getElementById('mig-btn-apply').disabled = true;
+    document.getElementById('mig-btn-apply').disabled    = true;
     document.getElementById('mig-btn-apply').textContent = 'Applying…';
     try {
-      const r = await migm.execute(MW.sourcePattern, MW.targetTemplate);
-      closeModal('modal-migration'); showToast(`Done: ${r.applied} URLs added.`, 'success'); loadAll();
+      const r = await migm.execute(MW.templates);
+      closeModal('modal-migration');
+      showToast(`Done: ${r.applied} URL${r.applied !== 1 ? 's' : ''} added.`, 'success');
+      loadAll();
     } catch (e) { showToast(e.message, 'error'); }
   });
 }
@@ -1148,13 +1315,15 @@ function bindStaticEvents() {
   document.getElementById('btn-bulk-remove-preview').addEventListener('click', previewBulkRemoval);
   document.getElementById('btn-bulk-remove-confirm').addEventListener('click', executeBulkRemoval);
 
-  // Tags modal search
-  document.getElementById('tg-search').addEventListener('input', e => renderTagGroupList(e.target.value));
+  // Tags modal search + unused filter + delete-unused
+  document.getElementById('tg-search').addEventListener('input', () => _tgRerender());
+  document.getElementById('tg-filter-unused').addEventListener('change', () => _tgRerender());
+  document.getElementById('tg-btn-delete-unused').addEventListener('click', deleteUnusedTagGroups);
   document.getElementById('tg-btn-new').addEventListener('click', async () => {
     const label = prompt('Primary label for new Tag Group:')?.trim();
     if (!label) return;
     tgm.getOrCreate(label); await tgm.save();
-    renderTagGroupList(document.getElementById('tg-search').value); loadAll();
+    _tgRerender(); loadAll();
   });
 
   // Resource modal actions

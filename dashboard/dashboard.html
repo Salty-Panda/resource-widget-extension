@@ -360,6 +360,9 @@
         <h2 class="modal-title">Tag Groups</h2>
         <div class="modal-header-actions">
           <input id="tg-search" type="search" class="form-input" style="width:200px" placeholder="Filter…" />
+          <label class="checkbox-label" style="font-size:11px;white-space:nowrap">
+            <input type="checkbox" id="tg-filter-unused" /> Unused only
+          </label>
           <button id="tg-btn-new" class="btn btn-primary btn-sm">+ New Group</button>
           <button class="modal-close" data-modal="modal-tags">✕</button>
         </div>
@@ -368,6 +371,8 @@
         <div id="tg-list" class="tg-list"></div>
       </div>
       <div class="modal-footer">
+        <button id="tg-btn-delete-unused" class="btn btn-danger btn-sm">Delete Unused</button>
+        <span style="flex:1"></span>
         <button class="btn btn-secondary modal-close" data-modal="modal-tags">Close</button>
       </div>
     </div>
