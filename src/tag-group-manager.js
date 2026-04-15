@@ -1,4 +1,4 @@
-import { STORAGE_KEYS } from './constants.js';
+import { STORAGE_KEYS, LEGACY_STORAGE_KEYS } from './constants.js';
 
 /**
  * Tag Group shape:
@@ -20,6 +20,16 @@ export class TagGroupManager {
   // ─── Lifecycle ─────────────────────────────────────────────────────────────
 
   async initialize() {
+    // One-time migration: move rim_tag_groups_v1 → pbf_tag_groups_v1 if needed.
+    // ResourceManager handles resources/settings; we handle tag groups here.
+    const legacy = await chrome.storage.local.get(LEGACY_STORAGE_KEYS.TAG_GROUPS);
+    if (legacy[LEGACY_STORAGE_KEYS.TAG_GROUPS] != null) {
+      await chrome.storage.local.set({
+        [STORAGE_KEYS.TAG_GROUPS]: legacy[LEGACY_STORAGE_KEYS.TAG_GROUPS],
+      });
+      await chrome.storage.local.remove(LEGACY_STORAGE_KEYS.TAG_GROUPS);
+    }
+
     const data = await chrome.storage.local.get(STORAGE_KEYS.TAG_GROUPS);
     this.tagGroups = data[STORAGE_KEYS.TAG_GROUPS] || {};
   }

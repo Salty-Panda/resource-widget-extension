@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "Resource ID Manager",
-  "short_name": "RIM",
+  "name": "Panda's Box of Fluff",
+  "short_name": "PBF",
   "version": "1.0.0",
   "description": "ID-driven resource management system — consolidate URLs, manage IDs, recover broken links.",
   "permissions": [
@@ -22,7 +22,7 @@
   },
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "Resource ID Manager"
+    "default_title": "Panda's Box of Fluff"
   },
   "icons": {
     "16": "icons/icon16.png",

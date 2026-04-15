@@ -1,5 +1,5 @@
 /**
- * RIM Service Worker (MV3)
+ * PBF — Service Worker (MV3)
  *
  * Responsibilities:
  *   1. Harvest page titles from chrome.tabs.onUpdated for tracked URLs.

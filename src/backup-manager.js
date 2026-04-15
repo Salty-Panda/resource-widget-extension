@@ -2,7 +2,7 @@
 const BACKUP_VERSION = 1;
 
 /**
- * Handles JSON export/import of all RIM data.
+ * Handles JSON export/import of all PBF data.
  */
 export class BackupManager {
   /**
@@ -41,7 +41,7 @@ export class BackupManager {
     const date = new Date().toISOString().slice(0, 10);
     const a    = document.createElement('a');
     a.href     = url;
-    a.download = `rim-backup-${date}.json`;
+    a.download = `pbf-backup-${date}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

@@ -4,11 +4,22 @@
 export const ID_REGEX = /\b(\w{2,8}-\d{3,5})\b/gi;
 
 export const STORAGE_KEYS = {
-  RESOURCES:    'rim_resources_v1',
-  URL_INDEX:    'rim_url_index_v1',
-  TAG_GROUPS:   'rim_tag_groups_v1',
-  PENDING_TAGS: 'rim_pending_tags_v1',
-  SETTINGS:     'rim_settings_v1',
+  RESOURCES:    'pbf_resources_v1',
+  URL_INDEX:    'pbf_url_index_v1',
+  TAG_GROUPS:   'pbf_tag_groups_v1',
+  PENDING_TAGS: 'pbf_pending_tags_v1',
+  SETTINGS:     'pbf_settings_v1',
+};
+
+/**
+ * Legacy storage keys (used before the rename from RIM → PBF).
+ * Read once during migration, then deleted.
+ */
+export const LEGACY_STORAGE_KEYS = {
+  RESOURCES:  'rim_resources_v1',
+  URL_INDEX:  'rim_url_index_v1',
+  TAG_GROUPS: 'rim_tag_groups_v1',
+  SETTINGS:   'rim_settings_v1',
 };
 
 export const DEFAULT_SETTINGS = {

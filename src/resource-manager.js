@@ -1,4 +1,4 @@
-import { STORAGE_KEYS, DEFAULT_SETTINGS } from './constants.js';
+import { STORAGE_KEYS, LEGACY_STORAGE_KEYS, DEFAULT_SETTINGS } from './constants.js';
 import { extractIdFromUrl, isPatternId, normalizeId } from './id-extractor.js';
 import { normalizeUrl, urlKey } from './url-utils.js';
 
@@ -6,9 +6,9 @@ import { normalizeUrl, urlKey } from './url-utils.js';
  * Core resource management class.
  *
  * Storage schema (chrome.storage.local):
- *   rim_resources_v1 : { [normalizedId: string]: Resource }
- *   rim_url_index_v1 : { [normalizedUrl: string]: normalizedId }
- *   rim_settings_v1  : Settings
+ *   pbf_resources_v1 : { [normalizedId: string]: Resource }
+ *   pbf_url_index_v1 : { [normalizedUrl: string]: normalizedId }
+ *   pbf_settings_v1  : Settings
  *
  * Resource shape:
  * {
@@ -33,6 +33,32 @@ export class ResourceManager {
   // ─── Lifecycle ─────────────────────────────────────────────────────────────
 
   async initialize() {
+    // ── One-time migration: rim_* → pbf_* ──────────────────────────────────
+    // If the new pbf_* keys are absent but the old rim_* keys exist, copy the
+    // data across and delete the stale keys so the migration runs only once.
+    const legacyData = await chrome.storage.local.get([
+      LEGACY_STORAGE_KEYS.RESOURCES,
+      LEGACY_STORAGE_KEYS.TAG_GROUPS,
+      LEGACY_STORAGE_KEYS.SETTINGS,
+    ]);
+    const hasLegacy = legacyData[LEGACY_STORAGE_KEYS.RESOURCES] != null;
+    if (hasLegacy) {
+      const newKeys = {};
+      if (legacyData[LEGACY_STORAGE_KEYS.RESOURCES])
+        newKeys[STORAGE_KEYS.RESOURCES]  = legacyData[LEGACY_STORAGE_KEYS.RESOURCES];
+      if (legacyData[LEGACY_STORAGE_KEYS.TAG_GROUPS])
+        newKeys[STORAGE_KEYS.TAG_GROUPS] = legacyData[LEGACY_STORAGE_KEYS.TAG_GROUPS];
+      if (legacyData[LEGACY_STORAGE_KEYS.SETTINGS])
+        newKeys[STORAGE_KEYS.SETTINGS]   = legacyData[LEGACY_STORAGE_KEYS.SETTINGS];
+      await chrome.storage.local.set(newKeys);
+      await chrome.storage.local.remove([
+        LEGACY_STORAGE_KEYS.RESOURCES,
+        LEGACY_STORAGE_KEYS.URL_INDEX,
+        LEGACY_STORAGE_KEYS.TAG_GROUPS,
+        LEGACY_STORAGE_KEYS.SETTINGS,
+      ]);
+    }
+    // ── Normal load ─────────────────────────────────────────────────────────
     const data = await chrome.storage.local.get([
       STORAGE_KEYS.RESOURCES,
       STORAGE_KEYS.URL_INDEX,

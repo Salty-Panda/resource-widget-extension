@@ -1,4 +1,4 @@
-# Resource ID Manager (RIM) — Chrome Extension
+# Panda's Box of Fluff — Chrome Extension
 
 A structured, ID-driven resource management system that replaces Chrome bookmarks with redundancy, deduplication, and broken-link recovery.
 
