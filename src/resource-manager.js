@@ -239,7 +239,7 @@ export class ResourceManager {
         res.isPatternId = isPatternId(newId);
         this.resources[newId] = res;
         delete this.resources[nid];
-        for (const u of res.urls) this.urlIndex[u] = newId;
+        for (const u of res.urls) this.urlIndex[urlKey(u)] = newId;
         delete updates.id;
       }
       const finalId = res.id;
@@ -286,7 +286,7 @@ export class ResourceManager {
     const nid = normalizeId(resourceId);
     const res = this.resources[nid];
     if (!res) return false;
-    for (const u of res.urls) delete this.urlIndex[u];
+    for (const u of res.urls) delete this.urlIndex[urlKey(u)];
     delete this.resources[nid];
     await this.save();
     return true;
