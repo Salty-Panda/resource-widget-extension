@@ -71,13 +71,27 @@
 
   <!-- ── URL not found but its ID matches an existing resource ── -->
   <div id="state-id-match" class="state-panel hidden">
-    <div class="info-box info-box--blue">
+    <!-- Warning indicator -->
+    <div class="info-box info-box--warn">
       <span class="info-icon">🔗</span>
       <div>
-        <strong>ID match found: <span id="id-match-id"></span></strong>
-        <p>This URL's ID matches a resource, but this URL is not yet linked.</p>
+        <strong>ID match: <span id="id-match-id"></span></strong>
+        <p>Current URL is not yet linked to this resource.</p>
       </div>
     </div>
+
+    <!-- Compact resource summary (filled by JS) -->
+    <div class="resource-preview-card" id="id-match-resource-card"></div>
+
+    <!-- Tag review / edit before linking -->
+    <div class="quick-edit">
+      <label class="form-label">Tags</label>
+      <div class="chip-input-wrap" id="idmatch-chip-wrap">
+        <input class="chip-text-input" id="idmatch-chip-text" placeholder="Add tag…" autocomplete="off" />
+        <div class="ac-dropdown hidden" id="idmatch-ac-drop"></div>
+      </div>
+    </div>
+
     <button id="btn-link-url" class="btn btn-primary btn-full">Add this URL to the resource</button>
     <button id="btn-open-matched" class="btn btn-secondary btn-full">Open in Dashboard</button>
   </div>

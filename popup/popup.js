@@ -6,10 +6,11 @@ import { MSG, STORAGE_KEYS } from '../src/constants.js';
 // ─── Module state ─────────────────────────────────────────────────────────────
 const rm  = new ResourceManager();
 const tgm = new TagGroupManager();
-let currentTab   = null;
-let editResource = null;
-let knownChips   = null; // TagChipInput for state-known
-let newChips     = null; // TagChipInput for state-new
+let currentTab    = null;
+let editResource  = null;
+let knownChips    = null; // TagChipInput for state-known
+let newChips      = null; // TagChipInput for state-new
+let idMatchChips  = null; // TagChipInput for state-id-match
 
 // ─── Chip-based tag input ─────────────────────────────────────────────────────
 /**
@@ -137,9 +138,11 @@ class TagChipInput {
 
   _handleKey(e) {
     const q = this.input.value.trim();
-    if (e.key === 'Enter') {
-      e.preventDefault();
+    if (e.key === 'Enter' || e.key === 'Tab') {
       const active = this.dropdown.querySelector('.ac-item.active');
+      // Only intercept Tab when there's something to commit; otherwise let it shift focus naturally
+      if (e.key === 'Tab' && !active && !q) return;
+      e.preventDefault();
       if (active) {
         if (active.dataset.id)         this.addById(active.dataset.id, 'existing');
         else if (active.dataset.value) this._createAndAdd(active.dataset.value);
@@ -148,6 +151,8 @@ class TagChipInput {
         if (tg) this.addById(tg.id, 'existing'); else this._createAndAdd(q);
       }
       this.input.value = ''; this._closeDropdown();
+      // Keep focus in the input field for continued tag entry
+      this.input.focus();
     } else if (e.key === 'Escape') {
       this._closeDropdown();
     } else if (e.key === 'ArrowDown') {
@@ -291,6 +296,7 @@ async function _determineState(detectedIds = []) {
     if (byId) {
       editResource = byId;
       document.getElementById('id-match-id').textContent = extractedId;
+      _renderIdMatchState(byId, detectedIds);
       _showState('id-match');
       return;
     }
@@ -350,6 +356,43 @@ function _renderNewState(url, extractedId, detectedIds = []) {
   newChips = new TagChipInput('new-chip-wrap', 'new-chip-text', 'new-ac-drop');
   if (detectedIds.length > 0) newChips.setDetected(detectedIds);
   _renderStarInput('new-rating', 0);
+}
+
+/**
+ * Render the id-match state panel:
+ *  - compact summary of the matched resource
+ *  - chip input pre-populated with existing tags + page-detected tags
+ */
+function _renderIdMatchState(resource, detectedIds = []) {
+  // Fill compact resource preview card
+  const card = document.getElementById('id-match-resource-card');
+  const tagLabels = resource.tags
+    .slice(0, 4)
+    .map(id => tgm.getById(id)?.primaryLabel || id)
+    .join(', ') || '—';
+  const moreTags = resource.tags.length > 4 ? ` +${resource.tags.length - 4}` : '';
+  card.innerHTML = `
+    <div class="resource-preview-row">
+      <span class="resource-preview-label">ID</span>
+      <span class="resource-preview-value" style="font-weight:700;font-family:monospace">${_esc(resource.id)}</span>
+      ${resource.isPatternId ? '<span class="tag-pattern" style="font-size:9px">ID</span>' : ''}
+    </div>
+    <div class="resource-preview-row">
+      <span class="resource-preview-label">URLs</span>
+      <span class="resource-preview-value">${resource.urls.length} stored</span>
+    </div>
+    <div class="resource-preview-row">
+      <span class="resource-preview-label">Tags</span>
+      <span class="resource-preview-value">${_esc(tagLabels + moreTags)}</span>
+    </div>`;
+
+  // Chip input: existing resource tags + newly detected tags
+  idMatchChips = new TagChipInput('idmatch-chip-wrap', 'idmatch-chip-text', 'idmatch-ac-drop');
+  idMatchChips.setExisting(resource.tags);
+  if (detectedIds.length > 0) {
+    const newDetected = detectedIds.filter(id => !resource.tags.includes(id));
+    if (newDetected.length > 0) idMatchChips.mergeDetected(newDetected);
+  }
 }
 
 // ─── Stars ────────────────────────────────────────────────────────────────────
@@ -430,7 +473,9 @@ async function _handleUpdate() {
 async function _handleLinkUrl() {
   if (!currentTab?.url || !editResource) return;
   try {
-    await rm.addUrl(currentTab.url, {});
+    const tagIds = idMatchChips ? idMatchChips.getIds() : [];
+    await tgm.save(); // persist any newly created Tag Groups
+    await rm.addUrl(currentTab.url, { tags: tagIds });
     editResource = rm.getResourceByUrl(currentTab.url);
     _renderKnownState(editResource, []);
     _showState('known');
