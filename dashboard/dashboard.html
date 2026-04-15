@@ -44,11 +44,17 @@
 
           <label class="filter-label">Tags (AND)</label>
           <div id="filter-tags-list" class="filter-tag-list"></div>
-          <input id="filter-tag-input" type="text" class="filter-input" placeholder="Add tag filter…" autocomplete="off" />
+          <div class="filter-ac-wrap">
+            <input id="filter-tag-input" type="text" class="filter-input" placeholder="Add tag filter…" autocomplete="off" />
+            <div class="filter-ac-drop hidden" id="filter-tag-drop"></div>
+          </div>
 
           <label class="filter-label mt-8">Exclude Tags (NOT)</label>
           <div id="filter-exclude-tags-list" class="filter-tag-list"></div>
-          <input id="filter-exclude-input" type="text" class="filter-input" placeholder="Exclude tag…" autocomplete="off" />
+          <div class="filter-ac-wrap">
+            <input id="filter-exclude-input" type="text" class="filter-input" placeholder="Exclude tag…" autocomplete="off" />
+            <div class="filter-ac-drop hidden" id="filter-exclude-drop"></div>
+          </div>
 
           <label class="filter-label mt-8">Min Rating</label>
           <div id="filter-rating" class="rating-filter">

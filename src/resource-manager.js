@@ -1,6 +1,6 @@
 import { STORAGE_KEYS, DEFAULT_SETTINGS } from './constants.js';
 import { extractIdFromUrl, isPatternId, normalizeId } from './id-extractor.js';
-import { normalizeUrl } from './url-utils.js';
+import { normalizeUrl, urlKey } from './url-utils.js';
 
 /**
  * Core resource management class.
@@ -39,9 +39,21 @@ export class ResourceManager {
       STORAGE_KEYS.SETTINGS,
     ]);
     this.resources = data[STORAGE_KEYS.RESOURCES] || {};
-    this.urlIndex  = data[STORAGE_KEYS.URL_INDEX]  || {};
     this.settings  = { ...DEFAULT_SETTINGS, ...(data[STORAGE_KEYS.SETTINGS] || {}) };
+    // Always rebuild from resources to ensure lowercase (case-insensitive) keys.
+    // This also migrates any existing data that used the old mixed-case key format.
+    this._rebuildUrlIndex();
     this._ready    = true;
+  }
+
+  /** Rebuild urlIndex from resources using lowercase keys. */
+  _rebuildUrlIndex() {
+    this.urlIndex = {};
+    for (const res of Object.values(this.resources)) {
+      for (const url of res.urls) {
+        this.urlIndex[urlKey(url)] = res.id;
+      }
+    }
   }
 
   /** Persist resources + URL index in one atomic write. */
@@ -59,7 +71,7 @@ export class ResourceManager {
   // ─── Read helpers ───────────────────────────────────────────────────────────
 
   getResourceByUrl(url) {
-    const id = this.urlIndex[normalizeUrl(url)];
+    const id = this.urlIndex[urlKey(url)];
     return id ? (this.resources[id] ?? null) : null;
   }
 
@@ -100,8 +112,8 @@ export class ResourceManager {
     const nUrl  = normalizeUrl(url);
     const { tags = [], rating = null, title = null, name = null, createdAt = null } = options;
 
-    // 1. URL already known
-    const existingId = this.urlIndex[nUrl];
+    // 1. URL already known (case-insensitive lookup)
+    const existingId = this.urlIndex[urlKey(nUrl)];
     if (existingId && this.resources[existingId]) {
       const res = this.resources[existingId];
       let changed = false;
@@ -117,10 +129,10 @@ export class ResourceManager {
     // 2 & 3. ID-based resource
     if (extractedId) {
       if (this.resources[extractedId]) {
-        // auto-merge: add URL to existing resource
+        // auto-merge: add URL to existing resource (case-insensitive duplicate check)
         const res = this.resources[extractedId];
-        if (!res.urls.includes(nUrl)) res.urls.push(nUrl);
-        this.urlIndex[nUrl] = extractedId;
+        if (!res.urls.some(u => urlKey(u) === urlKey(nUrl))) res.urls.push(nUrl);
+        this.urlIndex[urlKey(nUrl)] = extractedId;
         if (tags.length)  res.tags   = [...new Set([...res.tags,   ...tags])];
         if (rating != null) res.rating = rating;
         if (title && !res.titles.includes(title)) res.titles = [...new Set([...res.titles, title])];
@@ -157,7 +169,7 @@ export class ResourceManager {
       updatedAt:   now,
     };
     this.resources[id] = resource;
-    if (url) this.urlIndex[url] = id;
+    if (url) this.urlIndex[urlKey(url)] = id;
     await this.save();
     return { resource, created: true, merged: false };
   }
@@ -217,11 +229,20 @@ export class ResourceManager {
 
   async _applyFieldUpdates(res, updates) {
     if ('urls' in updates) {
-      const newUrls = [...new Set(updates.urls.map(normalizeUrl))];
-      // Remove stale index entries
-      for (const u of res.urls) if (!newUrls.includes(u)) delete this.urlIndex[u];
+      // Deduplicate case-insensitively, preserving first occurrence's casing
+      const seen = new Set();
+      const newUrls = updates.urls.map(normalizeUrl).filter(u => {
+        const k = urlKey(u);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+      // Remove stale index entries (case-insensitive match against new list)
+      for (const u of res.urls) {
+        if (!newUrls.some(n => urlKey(n) === urlKey(u))) delete this.urlIndex[urlKey(u)];
+      }
       // Add new entries
-      for (const u of newUrls) this.urlIndex[u] = res.id;
+      for (const u of newUrls) this.urlIndex[urlKey(u)] = res.id;
       res.urls = newUrls;
     }
     if ('titles' in updates) res.titles = [...new Set(updates.titles)];
@@ -265,10 +286,18 @@ export class ResourceManager {
     const finalId = resolvedId ? normalizeId(resolvedId) : nt;
     if (finalId !== nt && this.resources[finalId]) throw new Error(`ID conflict: ${finalId}`);
 
+    // Case-insensitive URL merge: preserve first occurrence's casing
+    const urlKeyMap = new Map();
+    for (const u of [...tgt.urls, ...src.urls]) {
+      const k = urlKey(u);
+      if (!urlKeyMap.has(k)) urlKeyMap.set(k, u);
+    }
+    const mergedUrls = [...urlKeyMap.values()];
+
     const merged = {
       id:          finalId,
       isPatternId: isPatternId(finalId),
-      urls:        [...new Set([...tgt.urls, ...src.urls])],
+      urls:        mergedUrls,
       titles:      [...new Set([...tgt.titles, ...src.titles])],
       tags:        [...new Set([...tgt.tags, ...src.tags])],
       rating:      tgt.rating ?? src.rating,
@@ -276,10 +305,10 @@ export class ResourceManager {
       updatedAt:   Date.now(),
     };
 
-    // Update URL index
-    for (const u of merged.urls) this.urlIndex[u] = finalId;
-    // Cleanup old URL index entries that aren't in merged
-    for (const u of src.urls) { if (!merged.urls.includes(u)) delete this.urlIndex[u]; }
+    // Remove all old index entries for both resources
+    for (const u of [...src.urls, ...tgt.urls]) delete this.urlIndex[urlKey(u)];
+    // Add index entries for the merged URL set
+    for (const u of mergedUrls) this.urlIndex[urlKey(u)] = finalId;
 
     delete this.resources[ns];
     delete this.resources[nt];
@@ -352,11 +381,24 @@ export class ResourceManager {
   importResourceData(data) {
     const { urls = [], titles = [], tags = [], rating = null } = data;
     const nid = normalizeId(data.id);
-    const nUrls = [...new Set(urls.map(normalizeUrl))];
+
+    // Deduplicate input URLs case-insensitively
+    const seen = new Set();
+    const nUrls = urls.map(normalizeUrl).filter(u => {
+      const k = urlKey(u);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
 
     if (this.resources[nid]) {
       const r = this.resources[nid];
-      for (const u of nUrls) { if (!r.urls.includes(u)) { r.urls.push(u); this.urlIndex[u] = nid; } }
+      for (const u of nUrls) {
+        if (!r.urls.some(e => urlKey(e) === urlKey(u))) {
+          r.urls.push(u);
+          this.urlIndex[urlKey(u)] = nid;
+        }
+      }
       r.titles   = [...new Set([...r.titles, ...titles])];
       r.tags     = [...new Set([...r.tags,   ...tags])];
       if (rating && !r.rating) r.rating = rating;
@@ -373,7 +415,7 @@ export class ResourceManager {
       updatedAt: data.updatedAt || now,
     };
     this.resources[nid] = resource;
-    for (const u of nUrls) this.urlIndex[u] = nid;
+    for (const u of nUrls) this.urlIndex[urlKey(u)] = nid;
     return resource;
   }
 }

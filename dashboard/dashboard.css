@@ -570,6 +570,24 @@ a:hover { text-decoration: underline; }
 .tree-children { padding-left: 22px; }
 .tree-children.hidden { display: none; }
 
+/* ── Filter autocomplete ─────────────────────────────────────── */
+.filter-ac-wrap { position: relative; }
+.filter-ac-drop {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 200;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); margin-top: 2px;
+  max-height: 200px; overflow-y: auto;
+  box-shadow: 0 4px 16px rgba(0,0,0,.45);
+}
+.filter-ac-drop.hidden { display: none; }
+.filter-ac-item {
+  padding: 6px 10px; font-size: 12px; color: var(--text-sec);
+  cursor: pointer; transition: background .1s; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.filter-ac-item:hover,
+.filter-ac-item.active { background: var(--elevated); color: var(--text); }
+
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track  { background: transparent; }

@@ -1,4 +1,4 @@
-import { normalizeUrl, isValidUrl } from './url-utils.js';
+import { normalizeUrl, isValidUrl, urlKey } from './url-utils.js';
 
 /**
  * ID-based URL generation for migration.
@@ -61,8 +61,7 @@ export class MigrationManager {
       if (!resource.isPatternId) continue;
       for (const tpl of templates) {
         const generatedUrl   = this.buildUrl(tpl, resource.id);
-        const normalized     = normalizeUrl(generatedUrl);
-        const alreadyPresent = resource.urls.map(normalizeUrl).includes(normalized);
+        const alreadyPresent = resource.urls.some(u => urlKey(u) === urlKey(generatedUrl));
         results.push({ resource, template: tpl, generatedUrl, alreadyPresent });
       }
     }
@@ -125,9 +124,9 @@ export class MigrationManager {
         skipped++;
       } else {
         const nUrl = normalizeUrl(generatedUrl);
-        if (isValidUrl(generatedUrl) && !resource.urls.includes(nUrl)) {
+        if (isValidUrl(generatedUrl) && !resource.urls.some(u => urlKey(u) === urlKey(nUrl))) {
           resource.urls.push(nUrl);
-          this.rm.urlIndex[nUrl] = resource.id;
+          this.rm.urlIndex[urlKey(nUrl)] = resource.id;
           resource.updatedAt = Date.now();
           applied++;
         } else {

@@ -1206,6 +1206,95 @@ async function executeBulkRemoval() {
   loadAll();
 }
 
+// ─── Filter tag autocomplete ──────────────────────────────────────────────────
+
+/**
+ * Wire chip-based autocomplete to a sidebar filter tag input.
+ *
+ * @param {string}            inputId  — id of the <input> element
+ * @param {string}            dropId   — id of the dropdown container
+ * @param {'include'|'exclude'} mode   — which filter list to update
+ */
+function _bindFilterAC(inputId, dropId, mode) {
+  const input = document.getElementById(inputId);
+  const drop  = document.getElementById(dropId);
+  let acIdx   = -1;
+
+  function getList() {
+    return mode === 'include' ? state.filters.tags : state.filters.excludeTags;
+  }
+  function setList(arr) {
+    if (mode === 'include') state.filters.tags = arr;
+    else state.filters.excludeTags = arr;
+  }
+
+  function addTag(tgId) {
+    const list = getList();
+    if (list.includes(tgId)) return; // already added — ignore
+    setList([...list, tgId]);
+    input.value = '';
+    closeDrop();
+    renderFilterChips();
+    applyAndRender();
+  }
+
+  function showDrop(q) {
+    if (!q) { closeDrop(); return; }
+    const lq   = q.toLowerCase();
+    const list = getList();
+    const matched = tgm.getAll()
+      .filter(tg => !list.includes(tg.id))
+      .filter(tg => tg.aliases.some(a => a.toLowerCase().includes(lq)))
+      .slice(0, 8);
+    if (!matched.length) { closeDrop(); return; }
+    drop.innerHTML = matched.map(tg =>
+      `<div class="filter-ac-item" data-id="${esc(tg.id)}">${esc(tg.primaryLabel)}</div>`
+    ).join('');
+    drop.querySelectorAll('.filter-ac-item').forEach(el =>
+      el.addEventListener('mousedown', e => { e.preventDefault(); addTag(el.dataset.id); })
+    );
+    acIdx = -1;
+    drop.classList.remove('hidden');
+  }
+
+  function closeDrop() {
+    drop.classList.add('hidden');
+    drop.innerHTML = '';
+    acIdx = -1;
+  }
+
+  function navigateAc(dir) {
+    const items = [...drop.querySelectorAll('.filter-ac-item')];
+    if (!items.length) return;
+    items.forEach(i => i.classList.remove('active'));
+    acIdx = Math.max(-1, Math.min(items.length - 1, acIdx + dir));
+    if (acIdx >= 0) items[acIdx].classList.add('active');
+  }
+
+  input.addEventListener('input',   e  => showDrop(e.target.value.trim()));
+  input.addEventListener('blur',    ()  => setTimeout(closeDrop, 160));
+  input.addEventListener('keydown', e  => {
+    const q = input.value.trim();
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const active = drop.querySelector('.filter-ac-item.active');
+      if (active) {
+        addTag(active.dataset.id);
+      } else if (q) {
+        const tg = tgm.findByAlias(q);
+        if (tg) addTag(tg.id);
+        else showToast(`No tag group found for "${q}"`, 'warn');
+      }
+    } else if (e.key === 'Escape') {
+      closeDrop();
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault(); navigateAc(1);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault(); navigateAc(-1);
+    }
+  });
+}
+
 // ─── Static event bindings ────────────────────────────────────────────────────
 function bindStaticEvents() {
   // Search
@@ -1232,27 +1321,9 @@ function bindStaticEvents() {
     state.filters.patternOnly = e.target.checked; applyAndRender();
   });
 
-  // Tag filter inputs (resolve label → Tag Group ID)
-  document.getElementById('filter-tag-input').addEventListener('keydown', e => {
-    if (e.key !== 'Enter') return;
-    const val = e.target.value.trim(); if (!val) return;
-    const tg  = tgm.findByAlias(val);
-    if (!tg) { showToast(`No tag group found for "${val}"`, 'warn'); return; }
-    if (!state.filters.tags.includes(tg.id)) {
-      state.filters.tags.push(tg.id); e.target.value = '';
-      renderFilterChips(); applyAndRender();
-    }
-  });
-  document.getElementById('filter-exclude-input').addEventListener('keydown', e => {
-    if (e.key !== 'Enter') return;
-    const val = e.target.value.trim(); if (!val) return;
-    const tg  = tgm.findByAlias(val);
-    if (!tg) { showToast(`No tag group found for "${val}"`, 'warn'); return; }
-    if (!state.filters.excludeTags.includes(tg.id)) {
-      state.filters.excludeTags.push(tg.id); e.target.value = '';
-      renderFilterChips(); applyAndRender();
-    }
-  });
+  // Tag filter inputs — chip autocomplete (resolve label → Tag Group ID)
+  _bindFilterAC('filter-tag-input',     'filter-tag-drop',     'include');
+  _bindFilterAC('filter-exclude-input', 'filter-exclude-drop', 'exclude');
 
   // Clear filters
   document.getElementById('btn-clear-filters').addEventListener('click', () => {
