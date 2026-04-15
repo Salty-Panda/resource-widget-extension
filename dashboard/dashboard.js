@@ -1275,15 +1275,19 @@ function _bindFilterAC(inputId, dropId, mode) {
   input.addEventListener('blur',    ()  => setTimeout(closeDrop, 160));
   input.addEventListener('keydown', e  => {
     const q = input.value.trim();
-    if (e.key === 'Enter') {
-      e.preventDefault();
+    if (e.key === 'Enter' || e.key === 'Tab') {
       const active = drop.querySelector('.filter-ac-item.active');
+      // Let Tab pass through when there is nothing to commit
+      if (e.key === 'Tab' && !active && !q) return;
+      e.preventDefault();
       if (active) {
         addTag(active.dataset.id);
       } else if (q) {
         const tg = tgm.findByAlias(q);
         if (tg) addTag(tg.id);
-        else showToast(`No tag group found for "${q}"`, 'warn');
+        else if (e.key === 'Enter') showToast(`No tag group found for "${q}"`, 'warn');
+        // Tab with unrecognised text: silently clear so focus can move on
+        else { input.value = ''; closeDrop(); }
       }
     } else if (e.key === 'Escape') {
       closeDrop();
