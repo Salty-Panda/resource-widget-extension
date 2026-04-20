@@ -77,7 +77,7 @@ class TagChipInput {
     [...this.wrap.querySelectorAll('.tag-chip')].forEach(el => el.remove());
     for (const id of this._ids) {
       const tg     = tgm.getById(id);
-      const label  = tg ? tg.primaryLabel : id;
+      const label  = tg ? tg.primaryLabel : 'Unknown tag';
       const status = this._status[id] || 'existing';
       const badge  = status === 'detected' ? '<span class="chip-badge">detected</span>'
                    : status === 'created'  ? '<span class="chip-badge">new</span>'
@@ -245,6 +245,7 @@ function _extractStructuredValues() {
   await rm.initialize();
   await tgm.initialize();
   if (tgm.migrateResources(rm.resources)) { await tgm.save(); await rm.save(); }
+  if (tgm.resolveOrphanedTags(rm.resources) > 0) { await tgm.save(); }
   currentTab = await _getActiveTab();
   const detectedIds = await _scanPageForTags();
   await _determineState(detectedIds);
@@ -328,7 +329,7 @@ function _renderKnownState(resource, detectedIds = []) {
   const tagsEl = document.getElementById('known-tags');
   tagsEl.innerHTML = resource.tags.length
     ? resource.tags.map(id => {
-        const label = tgm.getById(id)?.primaryLabel || id;
+        const label = tgm.getById(id)?.primaryLabel || 'Unknown tag';
         return `<span class="tag-chip">${_esc(label)}</span>`;
       }).join('')
     : `<span class="muted small">—</span>`;
@@ -368,7 +369,7 @@ function _renderIdMatchState(resource, detectedIds = []) {
   const card = document.getElementById('id-match-resource-card');
   const tagLabels = resource.tags
     .slice(0, 4)
-    .map(id => tgm.getById(id)?.primaryLabel || id)
+    .map(id => tgm.getById(id)?.primaryLabel || 'Unknown tag')
     .join(', ') || '—';
   const moreTags = resource.tags.length > 4 ? ` +${resource.tags.length - 4}` : '';
   card.innerHTML = `

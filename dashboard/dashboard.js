@@ -31,6 +31,8 @@ const state = {
   await tgm.initialize();
   // One-time migration: flat string tags → Tag Group IDs
   if (tgm.migrateResources(rm.resources)) { await tgm.save(); await rm.save(); }
+  // Recover any orphaned tag references
+  if (tgm.resolveOrphanedTags(rm.resources) > 0) { await tgm.save(); }
   im   = new ImportManager(rm, tgm);
   migm = new MigrationManager(rm);
   loadAll();
@@ -642,13 +644,48 @@ async function deleteUnusedTagGroups() {
   loadAll();
 }
 
+/** Resolve all orphaned tag references by creating Tag Groups for them. */
+async function resolveOrphanedTags() {
+  const count = tgm.resolveOrphanedTags(rm.resources);
+  if (count === 0) { showToast('No orphaned tags found', 'warn'); return; }
+  await tgm.save();
+  showToast(`Recovered ${count} orphaned tag(s)`, 'success');
+  _tgRerender();
+  loadAll();
+}
+
 function renderTagGroupList(filter, unusedOnly = false) {
   const list     = document.getElementById('tg-list');
   const usageMap = buildTagUsageMap();
+
+  // Collect any orphaned tag IDs referenced by resources but missing from registry
+  const orphanIds = new Set();
+  for (const res of rm.getAllResources()) {
+    for (const tagId of res.tags) {
+      if (!tgm.getById(tagId)) orphanIds.add(tagId);
+    }
+  }
+
   let groups = tgm.getAll().filter(tg =>
     !filter || tg.primaryLabel.toLowerCase().includes(filter.toLowerCase()) ||
     tg.aliases.some(a => a.toLowerCase().includes(filter.toLowerCase()))
   );
+
+  // Append virtual entries for orphaned tags so they are visible
+  for (const oid of orphanIds) {
+    const matchesFilter = !filter || 'unknown tag'.includes(filter.toLowerCase()) || oid.toLowerCase().includes(filter.toLowerCase());
+    if (matchesFilter) {
+      groups.push({
+        id: oid,
+        primaryLabel: 'Unknown tag',
+        aliases: [oid],
+        _orphan: true,
+        createdAt: 0,
+        updatedAt: 0,
+      });
+    }
+  }
+
   if (unusedOnly) groups = groups.filter(tg => !usageMap[tg.id]);
   if (!groups.length) {
     list.innerHTML = '<div style="padding:20px;color:var(--text-mute);text-align:center">No tag groups found.</div>';
@@ -1394,6 +1431,7 @@ function bindStaticEvents() {
   document.getElementById('tg-search').addEventListener('input', () => _tgRerender());
   document.getElementById('tg-filter-unused').addEventListener('change', () => _tgRerender());
   document.getElementById('tg-btn-delete-unused').addEventListener('click', deleteUnusedTagGroups);
+  document.getElementById('tg-btn-resolve-orphans').addEventListener('click', resolveOrphanedTags);
   document.getElementById('tg-btn-new').addEventListener('click', async () => {
     const label = prompt('Primary label for new Tag Group:')?.trim();
     if (!label) return;

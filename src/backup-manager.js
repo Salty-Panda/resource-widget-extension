@@ -7,9 +7,11 @@ const BACKUP_VERSION = 1;
 export class BackupManager {
   /**
    * @param {import('./resource-manager.js').ResourceManager} rm
+   * @param {import('./tag-group-manager.js').TagGroupManager} [tgm]
    */
-  constructor(rm) {
-    this.rm = rm;
+  constructor(rm, tgm = null) {
+    this.rm  = rm;
+    this.tgm = tgm;
   }
 
   // ─── Export ──────────────────────────────────────────────────────────────────
@@ -24,6 +26,7 @@ export class BackupManager {
       exportedAt: Date.now(),
       resourceCount: this.rm.getCount(),
       resources: this.rm.getAllResources(),
+      tagGroups: this.tgm ? this.tgm.getAll() : [],
       settings:  this.rm.settings,
     };
   }
@@ -74,6 +77,42 @@ export class BackupManager {
     if (mode === 'replace') {
       this.rm.resources = {};
       this.rm.urlIndex  = {};
+      if (this.tgm) this.tgm.tagGroups = {};
+    }
+
+    // ── Restore Tag Groups before processing resources ──────────────────────
+    const idRemap = {}; // { oldId → newId } for conflict resolution
+    if (this.tgm && Array.isArray(data.tagGroups)) {
+      for (const tg of data.tagGroups) {
+        if (!tg.id) continue;
+        if (this.tgm.tagGroups[tg.id]) {
+          // ID already exists — merge aliases into existing group
+          const existing = this.tgm.tagGroups[tg.id];
+          existing.aliases = [...new Set([...existing.aliases, ...tg.aliases])];
+          existing.updatedAt = Date.now();
+          // No remap needed — same ID
+        } else {
+          // Check if any alias conflicts with an existing Tag Group
+          const conflict = tg.aliases.reduce((found, alias) =>
+            found || this.tgm.findByAlias(alias), null);
+          if (conflict) {
+            // Remap this imported tag group to the existing one
+            idRemap[tg.id] = conflict.id;
+            conflict.aliases = [...new Set([...conflict.aliases, ...tg.aliases])];
+            conflict.updatedAt = Date.now();
+          } else {
+            // No conflict — import as-is, preserving original ID
+            this.tgm.tagGroups[tg.id] = {
+              id:           tg.id,
+              primaryLabel: tg.primaryLabel,
+              aliases:      [...tg.aliases],
+              createdAt:    tg.createdAt || Date.now(),
+              updatedAt:    tg.updatedAt || Date.now(),
+            };
+          }
+        }
+      }
+      await this.tgm.save();
     }
 
     let imported = 0, mergedCount = 0;
@@ -81,12 +120,23 @@ export class BackupManager {
 
     for (const res of data.resources) {
       try {
+        // Remap tag IDs if conflicts were resolved
+        if (res.tags && Object.keys(idRemap).length > 0) {
+          res.tags = res.tags.map(t => idRemap[t] || t);
+          res.tags = [...new Set(res.tags)];
+        }
         const before = !!this.rm.resources[res.id?.toUpperCase?.()];
         this.rm.importResourceData(res);
         if (before) mergedCount++; else imported++;
       } catch (e) {
         errors.push(`${res.id}: ${e.message}`);
       }
+    }
+
+    // ── Recover any orphaned tag references ─────────────────────────────────
+    if (this.tgm) {
+      this.tgm.resolveOrphanedTags(this.rm.resources);
+      await this.tgm.save();
     }
 
     await this.rm.save();
