@@ -239,6 +239,36 @@ export class TagGroupManager {
     return migrated;
   }
 
+  /**
+   * Scan all resources for tg_… IDs that have no matching Tag Group and
+   * reconstruct a Tag Group for each one so no tag reference is silently lost.
+   *
+   * Mutates this.tagGroups in-place. Does NOT save — caller saves.
+   * @param {object} resources  rm.resources (keyed object)
+   * @returns {number}  number of Tag Groups created
+   */
+  resolveOrphanedTags(resources) {
+    let created = 0;
+    for (const res of Object.values(resources)) {
+      for (const tagId of res.tags) {
+        if (!tagId.startsWith('tg_')) continue;
+        if (this.tagGroups[tagId]) continue;
+        // Reconstruct a placeholder Tag Group so the reference is valid again
+        const label = `Recovered: ${tagId}`;
+        this.tagGroups[tagId] = {
+          id:           tagId,
+          primaryLabel: label,
+          aliases:      [label],
+          createdAt:    Date.now(),
+          updatedAt:    Date.now(),
+          recovered:    true,
+        };
+        created++;
+      }
+    }
+    return created;
+  }
+
   // ─── Private ─────────────────────────────────────────────────────────────────
 
   _get(id) {
