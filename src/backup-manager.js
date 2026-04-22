@@ -1,5 +1,5 @@
 
-const BACKUP_VERSION = 1;
+const BACKUP_VERSION = 2;
 
 /**
  * Handles JSON export/import of all PBF data.
@@ -18,16 +18,23 @@ export class BackupManager {
 
   /**
    * Serialise current data to a plain object ready for JSON.stringify.
+   * Runs orphan recovery before export to ensure consistency.
    * @returns {object}
    */
   buildExportData() {
+    // Repair any orphaned tag references before exporting
+    if (this.tgm) {
+      const fixed = this.tgm.resolveOrphanedTags(this.rm.resources);
+      if (fixed > 0) this.tgm.save(); // fire-and-forget; export continues
+    }
+
     return {
-      version:   BACKUP_VERSION,
-      exportedAt: Date.now(),
+      version:       BACKUP_VERSION,
+      exportedAt:    Date.now(),
       resourceCount: this.rm.getCount(),
-      resources: this.rm.getAllResources(),
-      tagGroups: this.tgm ? this.tgm.getAll() : [],
-      settings:  this.rm.settings,
+      resources:     this.rm.getAllResources(),
+      tagGroups:     this.tgm ? this.tgm.getAll() : [],
+      settings:      this.rm.settings,
     };
   }
 
@@ -54,15 +61,18 @@ export class BackupManager {
   // ─── Import ──────────────────────────────────────────────────────────────────
 
   /**
-   * Parse a JSON string (from a backup file) and import into the ResourceManager.
+   * Parse a JSON string (from a backup file) and import into storage.
    * @param {string} jsonText
-   * @param {{ mode?: 'merge'|'replace' }} options
-   *   merge  — import resources, merging with existing (default)
+   * @param {{ mode?: 'merge'|'replace', settingsMode?: 'overwrite'|'keep' }} options
+   *   merge   — combine with existing data (default)
    *   replace — clear everything first, then import
+   *   settingsMode defaults to 'overwrite' when mode=replace, 'keep' when mode=merge
    * @returns {{ imported:number, merged:number, errors:string[] }}
    */
   async importFromJson(jsonText, options = {}) {
     const { mode = 'merge' } = options;
+    const settingsMode = options.settingsMode ?? (mode === 'replace' ? 'overwrite' : 'keep');
+
     let data;
     try {
       data = JSON.parse(jsonText);
@@ -74,56 +84,71 @@ export class BackupManager {
       throw new Error('Backup file is missing "resources" array.');
     }
 
+    // Warn about version mismatch but continue
+    if (data.version && data.version > BACKUP_VERSION) {
+      console.warn(`[BackupManager] Backup version ${data.version} is newer than supported ${BACKUP_VERSION}. Proceeding with best-effort import.`);
+    }
+
+    // ── Step 1: Clear if replace mode ──────────────────────────────────────
     if (mode === 'replace') {
       this.rm.resources = {};
       this.rm.urlIndex  = {};
       if (this.tgm) this.tgm.tagGroups = {};
     }
 
-    // ── Restore Tag Groups before processing resources ──────────────────────
+    // ── Step 2: Restore Tag Groups (must happen before resources) ──────────
     const idRemap = {}; // { oldId → newId } for conflict resolution
-    if (this.tgm && Array.isArray(data.tagGroups)) {
-      for (const tg of data.tagGroups) {
-        if (!tg.id) continue;
+    if (this.tgm) {
+      const tagGroupsSource = Array.isArray(data.tagGroups) ? data.tagGroups : [];
+
+      for (const tg of tagGroupsSource) {
+        if (!tg.id || !tg.primaryLabel) continue;
+        const aliases = Array.isArray(tg.aliases) ? tg.aliases : [tg.primaryLabel];
+
         if (this.tgm.tagGroups[tg.id]) {
-          // ID already exists — merge aliases into existing group
+          // Same ID already exists — merge aliases in
           const existing = this.tgm.tagGroups[tg.id];
-          existing.aliases = [...new Set([...existing.aliases, ...tg.aliases])];
+          existing.aliases   = [...new Set([...existing.aliases, ...aliases])];
           existing.updatedAt = Date.now();
-          // No remap needed — same ID
+          // No remap — same ID, compatible
         } else {
-          // Check if any alias conflicts with an existing Tag Group
-          const conflict = tg.aliases.reduce((found, alias) =>
-            found || this.tgm.findByAlias(alias), null);
+          // Check if any alias matches an existing group
+          const conflict = aliases.reduce(
+            (found, alias) => found || this.tgm.findByAlias(alias), null
+          );
           if (conflict) {
-            // Remap this imported tag group to the existing one
+            // Remap: point old ID to the matched existing group
             idRemap[tg.id] = conflict.id;
-            conflict.aliases = [...new Set([...conflict.aliases, ...tg.aliases])];
+            conflict.aliases   = [...new Set([...conflict.aliases, ...aliases])];
             conflict.updatedAt = Date.now();
           } else {
-            // No conflict — import as-is, preserving original ID
+            // No conflict — import with original ID preserved
             this.tgm.tagGroups[tg.id] = {
               id:           tg.id,
               primaryLabel: tg.primaryLabel,
-              aliases:      [...tg.aliases],
+              aliases,
               createdAt:    tg.createdAt || Date.now(),
               updatedAt:    tg.updatedAt || Date.now(),
             };
           }
         }
       }
+
+      // Handle old v1 backups that had no tagGroups array:
+      // flat string tags in resources will be converted during migrateResources() below.
+
       await this.tgm.save();
     }
 
+    // ── Step 3: Import Resources ────────────────────────────────────────────
     let imported = 0, mergedCount = 0;
     const errors = [];
 
     for (const res of data.resources) {
       try {
-        // Remap tag IDs if conflicts were resolved
+        // Remap tag IDs if any conflicts were resolved above
         if (res.tags && Object.keys(idRemap).length > 0) {
-          res.tags = res.tags.map(t => idRemap[t] || t);
-          res.tags = [...new Set(res.tags)];
+          res.tags = [...new Set(res.tags.map(t => idRemap[t] || t))];
         }
         const before = !!this.rm.resources[res.id?.toUpperCase?.()];
         this.rm.importResourceData(res);
@@ -133,17 +158,27 @@ export class BackupManager {
       }
     }
 
-    // ── Recover any orphaned tag references ─────────────────────────────────
+    // ── Step 4: Migrate legacy flat-string tags & recover orphaned IDs ─────
     if (this.tgm) {
+      this.tgm.migrateResources(this.rm.resources);
       this.tgm.resolveOrphanedTags(this.rm.resources);
       await this.tgm.save();
     }
 
     await this.rm.save();
 
-    // Optionally restore settings
+    // ── Step 5: Settings ────────────────────────────────────────────────────
     if (data.settings) {
-      Object.assign(this.rm.settings, data.settings);
+      if (settingsMode === 'overwrite') {
+        Object.assign(this.rm.settings, data.settings);
+      } else {
+        // 'keep': only fill in keys that are missing from current settings
+        for (const [k, v] of Object.entries(data.settings)) {
+          if (this.rm.settings[k] === undefined || this.rm.settings[k] === null) {
+            this.rm.settings[k] = v;
+          }
+        }
+      }
       await this.rm.saveSettings();
     }
 

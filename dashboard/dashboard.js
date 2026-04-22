@@ -1026,16 +1026,23 @@ function updateStepsIndicator(current, total) {
 // ─── Backup Modal ─────────────────────────────────────────────────────────────
 function bindBackupModal() {
   document.getElementById('btn-export-json').addEventListener('click', () => {
-    new BackupManager(rm).downloadBackup(); showToast('Backup downloaded ✓', 'success');
+    new BackupManager(rm, tgm).downloadBackup(); showToast('Backup downloaded ✓', 'success');
   });
   document.getElementById('btn-import-backup').addEventListener('click', async () => {
     const file = document.getElementById('backup-file-input').files[0];
     const mode = document.querySelector('input[name="backup-mode"]:checked')?.value || 'merge';
     if (!file) { showToast('Select a file first', 'error'); return; }
+    if (mode === 'replace') {
+      const ok = confirm(
+        'FULL REPLACE will erase ALL existing resources, tag groups, and settings.\n' +
+        'This cannot be undone. Continue?'
+      );
+      if (!ok) return;
+    }
     try {
-      const result = await new BackupManager(rm).importFromFile(file, { mode });
+      const result = await new BackupManager(rm, tgm).importFromFile(file, { mode });
       document.getElementById('backup-import-result').textContent =
-        `Imported ${result.imported}, merged ${result.merged}.${result.errors.length ? ' Errors: '+result.errors.length : ''}`;
+        `Imported ${result.imported}, merged ${result.merged}.${result.errors.length ? ' Errors: ' + result.errors.length : ''}`;
       document.getElementById('backup-import-result').classList.remove('hidden');
       showToast('Import complete', result.errors.length ? 'warn' : 'success');
       loadAll();
