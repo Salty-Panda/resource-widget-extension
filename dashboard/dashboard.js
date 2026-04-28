@@ -544,56 +544,96 @@ function _itSelectAll(checked) {
 
 // ── Confirm import ────────────────────────────────────────────────────────────
 
-async function runSelectedImport() {
-  // Collect selected items by walking the full logical tree, NOT nodeInfoMap.
-  // nodeInfoMap only contains DOM-rendered (expanded) nodes; using it would
-  // silently skip selected bookmarks inside folders that were never expanded.
-  const items = [];
-  (function collectLeaves(nodes) {
+/**
+ * Group selected bookmarks by their immediate parent folder.
+ * Each group contains ALL direct leaves of that folder (for count-based fast
+ * path tracking) plus only the selected subset (for processing).
+ * @returns {Array<{folderId, folderTitle, orderedLeaves, selectedLeaves, allSelected}>}
+ */
+function collectFolderGroups() {
+  const groups = [];
+
+  function recurse(nodes) {
     for (const node of nodes) {
-      if (node.isFolder) {
-        collectLeaves(node.children);
-      } else if (importTree.checkedLeaves.has(node.nodeId)) {
-        items.push({ url: node.url, title: node.title, tags: node.parentTags, dateAdded: node.dateAdded });
+      if (!node.isFolder) continue;
+
+      // Leaves that are DIRECT children of this folder (not inside sub-folders)
+      const directLeaves = node.children.filter(c => !c.isFolder);
+
+      if (directLeaves.length > 0) {
+        const orderedLeaves  = directLeaves.map(l => ({ url: l.url, title: l.title, tags: l.parentTags, dateAdded: l.dateAdded }));
+        const selectedLeaves = directLeaves
+          .filter(l => importTree.checkedLeaves.has(l.nodeId))
+          .map(l => ({ url: l.url, title: l.title, tags: l.parentTags, dateAdded: l.dateAdded }));
+
+        if (selectedLeaves.length > 0) {
+          groups.push({
+            folderId:      node.nodeId,
+            folderTitle:   node.title,
+            orderedLeaves,
+            selectedLeaves,
+            allSelected:   selectedLeaves.length === orderedLeaves.length,
+          });
+        }
       }
+
+      // Recurse into sub-folders
+      recurse(node.children.filter(c => c.isFolder));
     }
-  })(importTree.displayTree);
-  if (!items.length) return;
+  }
+
+  recurse(importTree.displayTree);
+  return groups;
+}
+
+async function runSelectedImport() {
+  const forceFull = document.getElementById('import-force-full')?.checked ?? false;
+
+  const groups = collectFolderGroups();
+  if (!groups.length) return;
 
   // Switch UI to progress view
   document.getElementById('import-tree-body').classList.add('hidden');
   const progressEl = document.getElementById('import-progress-body');
   progressEl.classList.remove('hidden');
-  document.getElementById('btn-import-confirm').disabled     = true;
-  document.getElementById('btn-import-select-all').disabled  = true;
+  document.getElementById('btn-import-confirm').disabled      = true;
+  document.getElementById('btn-import-select-all').disabled   = true;
   document.getElementById('btn-import-deselect-all').disabled = true;
 
   const fill = document.getElementById('import-progress-fill');
   const text = document.getElementById('import-progress-text');
   fill.style.width = '0%';
-  text.textContent = `0 / ${items.length}`;
+
+  const totalSelected = groups.reduce((s, g) => s + g.selectedLeaves.length, 0);
+  text.textContent = `Preparing… (${totalSelected} selected)`;
 
   try {
-    const result = await im.importSelected(items, {
+    const result = await im.importSelectedGrouped(groups, {
+      forceFull,
       onProgress(done, total) {
-        fill.style.width    = Math.round(done / total * 100) + '%';
-        text.textContent    = `${done} / ${total}`;
+        fill.style.width = total > 0 ? Math.round(done / total * 100) + '%' : '100%';
+        text.textContent = `${done} / ${total}`;
       },
     });
 
-    // Post-import cleanup: some pre-existing resources may have been merged
-    // and now contain a mix of flat-string tags and tg_… IDs.
-    // migrateResources converts the flat strings to proper Tag Groups so they
-    // are immediately visible (and deletable) in the Tags manager.
-    // It also removes any orphaned tg_… IDs that have no matching Tag Group.
+    fill.style.width = '100%';
+
+    const skipMsg = result.fastPathSkipped > 0
+      ? `, ${result.fastPathSkipped} already imported (fast path)` : '';
+    const modeMsg = result.mode === 'incremental' ? ' [incremental]' : '';
+    text.textContent =
+      `Done! Added: ${result.imported}, Merged: ${result.merged}, Skipped: ${result.skipped}${skipMsg}${modeMsg}`;
+
+    const toastMsg = result.fastPathSkipped > 0
+      ? `Import: ${result.imported} added, ${result.merged} merged, ${result.fastPathSkipped} fast-pathed`
+      : `Import: ${result.imported} added, ${result.merged} merged`;
+    showToast(toastMsg, 'success');
+
+    // Migrate tags: convert any newly-created flat-string tags to Tag Groups
     if (tgm.migrateResources(rm.resources)) {
       await tgm.save();
       await rm.save();
     }
-
-    text.textContent =
-      `Done! Added: ${result.imported}, Merged: ${result.merged}, Skipped: ${result.skipped}`;
-    showToast(`Import: ${result.imported} added, ${result.merged} merged`, 'success');
     loadAll();
   } catch (e) {
     text.textContent = `Error: ${esc(e.message)}`;
@@ -1025,8 +1065,8 @@ function updateStepsIndicator(current, total) {
 
 // ─── Backup Modal ─────────────────────────────────────────────────────────────
 function bindBackupModal() {
-  document.getElementById('btn-export-json').addEventListener('click', () => {
-    new BackupManager(rm, tgm).downloadBackup(); showToast('Backup downloaded ✓', 'success');
+  document.getElementById('btn-export-json').addEventListener('click', async () => {
+    await new BackupManager(rm, tgm).downloadBackup(); showToast('Backup downloaded ✓', 'success');
   });
   document.getElementById('btn-import-backup').addEventListener('click', async () => {
     const file = document.getElementById('backup-file-input').files[0];

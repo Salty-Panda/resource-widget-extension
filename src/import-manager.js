@@ -1,5 +1,6 @@
 import { extractIdFromUrl } from './id-extractor.js';
 import { isValidUrl } from './url-utils.js';
+import { STORAGE_KEYS } from './constants.js';
 
 /**
  * Imports Chrome bookmarks into a ResourceManager.
@@ -13,6 +14,137 @@ export class ImportManager {
   constructor(rm, tgm) {
     this.rm  = rm;
     this.tgm = tgm;
+  }
+
+  // ─── Import State ────────────────────────────────────────────────────────────
+
+  /**
+   * Load per-folder import state from storage.
+   * Shape: { [folderNodeId]: { count, lastUrl, ts, title } }
+   * @returns {Promise<object>}
+   */
+  async loadImportState() {
+    const data = await chrome.storage.local.get(STORAGE_KEYS.IMPORT_STATE);
+    return data[STORAGE_KEYS.IMPORT_STATE] || {};
+  }
+
+  /**
+   * Persist per-folder import state.
+   * @param {object} state
+   */
+  async saveImportState(state) {
+    await chrome.storage.local.set({ [STORAGE_KEYS.IMPORT_STATE]: state });
+  }
+
+  /** Clear all stored import state (e.g. to reset fast-path tracking). */
+  async clearImportState() {
+    await chrome.storage.local.remove(STORAGE_KEYS.IMPORT_STATE);
+  }
+
+  // ─── Grouped / incremental import ────────────────────────────────────────────
+
+  /**
+   * State-aware grouped import with per-folder fast-path optimisation.
+   *
+   * For each fully-selected folder whose state is already stored:
+   *   1. Compare current leaf count with stored count.
+   *   2. If count grew (append-only pattern) and the last-processed URL still
+   *      matches → skip the first N items (fast path).
+   *   3. If the folder shrank or the URL does not match → fall back to full scan.
+   *
+   * Partially-selected folders always use full scan (URL-based deduplication
+   * inside rm.addUrl prevents duplicates).
+   *
+   * @param {Array<{
+   *   folderId:      string,                              // stable nodeId, e.g. "f_123"
+   *   folderTitle:   string,
+   *   orderedLeaves: {url,title,tags,dateAdded}[],        // ALL direct-child leaves, in tree order
+   *   selectedLeaves:{url,title,tags,dateAdded}[],        // only the selected subset
+   *   allSelected:   boolean,
+   * }>} groups
+   * @param {{ forceFull?: boolean, onProgress?: (done:number, total:number)=>void }} options
+   * @returns {Promise<{ imported:number, merged:number, skipped:number, fastPathSkipped:number, mode:'incremental'|'full' }>}
+   */
+  async importSelectedGrouped(groups, options = {}) {
+    const { forceFull = false, onProgress } = options;
+    const storedState = await this.loadImportState();
+    const newState    = { ...storedState };
+
+    let imported = 0, merged = 0, skipped = 0, fastPathSkipped = 0;
+    let anyIncremental = false;
+
+    // Build the de-duplicated processing list, applying fast-path per folder
+    const toProcess = [];
+
+    for (const group of groups) {
+      const { folderId, folderTitle, orderedLeaves, selectedLeaves, allSelected } = group;
+
+      let startIndex = 0;
+
+      if (!forceFull && allSelected && orderedLeaves.length > 0) {
+        const fs = storedState[folderId];
+        if (fs && fs.count > 0) {
+          const storedCount  = fs.count;
+          const currentCount = orderedLeaves.length;
+
+          if (currentCount >= storedCount) {
+            // Validate by checking that the item at (storedCount-1) still has the same URL
+            const expectedItem = orderedLeaves[storedCount - 1];
+            const urlMatches   = expectedItem &&
+              expectedItem.url.toLowerCase() === (fs.lastUrl || '').toLowerCase();
+
+            if (urlMatches) {
+              startIndex       = storedCount;
+              fastPathSkipped += storedCount;
+              anyIncremental   = true;
+            }
+            // urlMatches === false → validation failed → full scan (startIndex stays 0)
+          }
+          // currentCount < storedCount → folder shrank → full scan
+        }
+      }
+
+      if (allSelected) {
+        for (const item of orderedLeaves.slice(startIndex)) toProcess.push(item);
+        // Always update state for fully-selected folders (captures current count)
+        if (orderedLeaves.length > 0) {
+          newState[folderId] = {
+            count:   orderedLeaves.length,
+            lastUrl: orderedLeaves[orderedLeaves.length - 1].url,
+            ts:      Date.now(),
+            title:   folderTitle,
+          };
+        }
+      } else {
+        // Partial selection: process only selected leaves, no state update
+        for (const item of selectedLeaves) toProcess.push(item);
+      }
+    }
+
+    // Process all collected items
+    const total = toProcess.length;
+    for (let i = 0; i < total; i++) {
+      const { url, title, tags: rawLabels, dateAdded } = toProcess[i];
+      try {
+        const tagIds = rawLabels.map(label => this.tgm.getOrCreate(label).id);
+        const result = await this.rm.addUrl(url, { tags: tagIds, title, createdAt: dateAdded || null });
+        if (result.created) imported++;
+        else if (result.merged) merged++;
+        else skipped++;
+      } catch { skipped++; }
+      onProgress?.(i + 1, total);
+    }
+
+    await this.tgm.save();
+    await this.saveImportState(newState);
+
+    return {
+      imported,
+      merged,
+      skipped,
+      fastPathSkipped,
+      mode: anyIncremental ? 'incremental' : 'full',
+    };
   }
 
   /**

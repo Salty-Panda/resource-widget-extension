@@ -4,11 +4,12 @@
 export const ID_REGEX = /\b(\w{2,8}-\d{3,5})\b/gi;
 
 export const STORAGE_KEYS = {
-  RESOURCES:    'pbf_resources_v1',
-  URL_INDEX:    'pbf_url_index_v1',
-  TAG_GROUPS:   'pbf_tag_groups_v1',
-  PENDING_TAGS: 'pbf_pending_tags_v1',
-  SETTINGS:     'pbf_settings_v1',
+  RESOURCES:     'pbf_resources_v1',
+  URL_INDEX:     'pbf_url_index_v1',
+  TAG_GROUPS:    'pbf_tag_groups_v1',
+  PENDING_TAGS:  'pbf_pending_tags_v1',
+  SETTINGS:      'pbf_settings_v1',
+  IMPORT_STATE:  'pbf_import_state_v1',
 };
 
 /**

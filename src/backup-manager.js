@@ -1,3 +1,4 @@
+import { STORAGE_KEYS } from './constants.js';
 
 const BACKUP_VERSION = 2;
 
@@ -42,8 +43,12 @@ export class BackupManager {
    * Trigger a browser file download of the backup JSON.
    * Works only from popup / dashboard pages (not service worker).
    */
-  downloadBackup() {
+  async downloadBackup() {
     const data = this.buildExportData();
+    // Include per-folder import state so fast-path tracking survives device transfers
+    const stored = await chrome.storage.local.get(STORAGE_KEYS.IMPORT_STATE);
+    data.importState = stored[STORAGE_KEYS.IMPORT_STATE] || {};
+
     const json = JSON.stringify(data, null, 2);
     const blob = new Blob([json], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
@@ -180,6 +185,19 @@ export class BackupManager {
         }
       }
       await this.rm.saveSettings();
+    }
+
+    // ── Step 6: Import state (fast-path tracking) ────────────────────────────
+    if (data.importState && typeof data.importState === 'object') {
+      if (mode === 'replace') {
+        // Replace mode: restore import state verbatim
+        await chrome.storage.local.set({ [STORAGE_KEYS.IMPORT_STATE]: data.importState });
+      } else {
+        // Merge mode: combine — existing state takes priority for conflicting folders
+        const existing = await chrome.storage.local.get(STORAGE_KEYS.IMPORT_STATE);
+        const merged   = { ...data.importState, ...(existing[STORAGE_KEYS.IMPORT_STATE] || {}) };
+        await chrome.storage.local.set({ [STORAGE_KEYS.IMPORT_STATE]: merged });
+      }
     }
 
     return { imported, merged: mergedCount, errors };
